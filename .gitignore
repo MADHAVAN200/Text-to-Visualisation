@@ -1,0 +1,35 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+web_resources/
+
+# Python virtual environment & caches
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints
+
+# Local SQLite databases & configs
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+.env
+.env.local
+.env.*.local
+*.log
+
+# Production builds
+dist/
+out/
+build/
+
+# Editor files & OS configurations
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
