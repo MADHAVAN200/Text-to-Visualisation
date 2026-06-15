@@ -1,10 +1,48 @@
+:root {
+  --bg-main: #0d1117;        /* GitHub main dark bg */
+  --bg-sidebar: #161b22;     /* GitHub sidebar bg */
+  --border-color: #30363d;   /* GitHub dark border */
+  --glass-bg: rgba(22, 27, 34, 0.7);
+  
+  --slate-50: #f0f6fc;
+  --slate-100: #e6edf3;
+  --slate-200: #c9d1d9;
+  --slate-300: #b1bac4;
+  --slate-400: #8b949e;
+  --slate-500: #6e7681;
+  --slate-600: #484f58;
+  --slate-700: #30363d;
+  --slate-800: #21262d;
+  --slate-900: #161b22;
+  --slate-950: #0d1117;
+}
+
+.light {
+  --bg-main: #f8fafc;        /* slate-50 */
+  --bg-sidebar: #ffffff;
+  --border-color: #e2e8f0;   /* slate-200 */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  
+  --slate-50: #020617;
+  --slate-100: #0f172a;
+  --slate-200: #1e293b;
+  --slate-300: #334155;
+  --slate-400: #475569;
+  --slate-500: #64748b;
+  --slate-600: #94a3b8;
+  --slate-700: #cbd5e1;
+  --slate-800: #e2e8f0;
+  --slate-900: #f1f5f9;
+  --slate-950: #ffffff;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   body {
-    @apply bg-darkBg text-slate-100 font-sans antialiased overflow-x-hidden;
+    @apply bg-darkBg text-slate-100 font-sans antialiased overflow-x-hidden transition-colors duration-200;
     margin: 0;
   }
 }
@@ -31,12 +69,24 @@
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: var(--bg-main);
 }
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: var(--border-color);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: var(--slate-400);
+}
+
+/* Fix headers with text-transparent and white-gradient in light mode */
+.light .bg-clip-text {
+  background-image: linear-gradient(to right, #0f172a, #475569) !important;
+}
+
+/* Smooth transitions for theme switching */
+* {
+  transition-property: background-color, border-color;
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
