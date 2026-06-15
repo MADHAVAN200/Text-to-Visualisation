@@ -26,6 +26,7 @@ interface StoreState {
   queryHistory: any[];
   dashboards: any[];
   groqApiKey: string;
+  theme: 'dark' | 'light';
   
   setUser: (user: User | null) => void;
   setToken: (token: string | null) => void;
@@ -34,17 +35,19 @@ interface StoreState {
   setQueryHistory: (history: any[]) => void;
   setDashboards: (dashboards: any[]) => void;
   setGroqApiKey: (key: string) => void;
+  setTheme: (theme: 'dark' | 'light') => void;
   logout: () => void;
 }
 
 export const useStore = create<StoreState>((set) => ({
-  user: JSON.parse(localStorage.getItem('v2v_user') || 'null'),
-  token: localStorage.getItem('v2v_token') || null,
+  user: JSON.parse(localStorage.getItem('v2v_user') || '{"id":1,"name":"Guest User","email":"guest@example.com","role":"admin"}'),
+  token: localStorage.getItem('v2v_token') || 'mock-guest-token-12345',
   connectedDatabases: [],
   activeDatabase: JSON.parse(localStorage.getItem('v2v_active_db') || 'null'),
   queryHistory: [],
   dashboards: [],
   groqApiKey: localStorage.getItem('v2v_groq_api_key') || '',
+  theme: (localStorage.getItem('v2v_theme') as 'dark' | 'light') || 'dark',
 
   setUser: (user) => {
     localStorage.setItem('v2v_user', JSON.stringify(user));
@@ -78,6 +81,11 @@ export const useStore = create<StoreState>((set) => ({
   setGroqApiKey: (groqApiKey) => {
     localStorage.setItem('v2v_groq_api_key', groqApiKey);
     set({ groqApiKey });
+  },
+
+  setTheme: (theme) => {
+    localStorage.setItem('v2v_theme', theme);
+    set({ theme });
   },
 
   logout: () => {
