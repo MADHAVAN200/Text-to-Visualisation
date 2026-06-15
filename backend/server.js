@@ -18,6 +18,12 @@ const db = new sqlite3.Database(dbPath, (err) => {
     console.error('Failed to connect to metadata database:', err.message);
   } else {
     console.log('Connected to metadata database at:', dbPath);
+    // Enable WAL mode for concurrent read/write access and set busy timeout
+    db.serialize(() => {
+      db.run('PRAGMA journal_mode=WAL;');
+      db.run('PRAGMA busy_timeout=5000;'); // Wait up to 5s if database is locked
+      db.run('PRAGMA synchronous=NORMAL;'); // Balance safety and performance
+    });
   }
 });
 
