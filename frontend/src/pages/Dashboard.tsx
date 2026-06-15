@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import api from '../api';
 import { 
-  Database, Play, LayoutGrid, Activity, Sparkles, History 
+  Database, LayoutGrid, Activity, History, RefreshCw 
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useStore } from '../store/useStore';
 
 export default function Dashboard() {
   const [stats, setStats] = useState({
@@ -13,6 +14,28 @@ export default function Dashboard() {
     history: [] as any[]
   });
   const navigate = useNavigate();
+  const [generating, setGenerating] = useState(false);
+  const { activeDatabase, groqApiKey } = useStore();
+
+  const handleRecommendDashboard = async () => {
+    if (!activeDatabase) return;
+    setGenerating(true);
+    try {
+      const res = await api.post('/dashboards/recommend', {
+        database_id: activeDatabase.id,
+        api_key: groqApiKey
+      });
+      if (res.data && res.data.dashboard_id) {
+        // Redirect to the builder
+        navigate('/builder');
+      }
+    } catch (err) {
+      console.error('Failed to auto-generate recommended dashboard:', err);
+      alert('Failed to generate recommended dashboard. Please check that your database contains active table data.');
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -36,28 +59,6 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Title banner */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-gradient-to-r from-blue-950/20 to-slate-900 border border-darkBorder rounded-2xl p-6 relative overflow-hidden">
-        {/* Glow */}
-        <div className="absolute right-0 top-0 w-64 h-64 bg-blue-500/5 rounded-full blur-3xl"></div>
-        <div className="space-y-1 relative z-10">
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent flex items-center gap-2">
-            Welcome to Voice2Viz AI
-          </h1>
-          <p className="text-slate-400 text-sm">
-            AI-Powered Natural Language Analytics Platform. Connect databases and ask questions in plain English.
-          </p>
-        </div>
-        
-        <button
-          onClick={() => navigate('/workspace')}
-          className="mt-4 md:mt-0 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-5 rounded-xl transition-all shadow-md shadow-blue-600/10 flex items-center gap-1.5 active:scale-95"
-        >
-          <Play className="w-4 h-4 fill-white" />
-          Ask Your Data
-        </button>
-      </div>
-
       {/* Analytics statistics counters */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <div className="bg-darkSidebar/50 border border-darkBorder rounded-2xl p-5 flex items-center gap-4 relative overflow-hidden group hover:border-slate-600 transition-colors">
@@ -91,13 +92,63 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* AI Dashboard Recommender Card */}
+      <div className="bg-gradient-to-r from-blue-600/10 via-purple-600/5 to-emerald-500/10 border border-darkBorder rounded-2xl p-6 relative overflow-hidden group hover:border-slate-500 transition-all">
+        {/* Glow decoration */}
+        <div className="absolute top-0 right-0 w-[300px] h-[300px] bg-blue-500/10 rounded-full blur-[80px] pointer-events-none"></div>
+        <div className="absolute bottom-0 left-0 w-[300px] h-[300px] bg-purple-500/10 rounded-full blur-[80px] pointer-events-none"></div>
+
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+          <div className="space-y-2 max-w-2xl">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-bold tracking-wider uppercase">
+              Power BI Quick-Create
+            </div>
+            <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+              AI Smart Dashboard Recommender
+            </h2>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              No time to configure charts? Click below to let the AI analyze your connected database schema and query history, recommending a fully-structured, ready-made analytical dashboard instantly.
+            </p>
+          </div>
+
+          <div className="shrink-0 flex items-center gap-3">
+            <button
+              onClick={handleRecommendDashboard}
+              disabled={generating || !activeDatabase}
+              className={`flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-xs font-bold text-white transition-all shadow-md ${
+                !activeDatabase 
+                  ? 'bg-slate-800 border border-darkBorder text-slate-500 cursor-not-allowed'
+                  : generating
+                    ? 'bg-blue-600/50 cursor-wait'
+                    : 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/10 hover:scale-[1.02]'
+              }`}
+            >
+              {generating ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Generating Dashboard...
+                </>
+              ) : (
+                <>
+                  Generate AI Recommended Dashboard
+                </>
+              )}
+            </button>
+            {!activeDatabase && (
+              <span className="text-[10px] text-amber-400 font-semibold max-w-[120px] leading-tight">
+                Select/Connect a database to enable auto-generation.
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Quick Launch Guide */}
         <div className="lg:col-span-2 space-y-5">
           <div className="bg-darkSidebar/40 border border-darkBorder rounded-2xl p-6">
             <h2 className="text-base font-bold text-slate-200 mb-4 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-amber-400" />
               Quick-Start Workspace Guide
             </h2>
             

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import api from '../api';
-import { Database, Table, Key, Info, HelpCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { Table, Key, Info, HelpCircle, AlertCircle, RefreshCw } from 'lucide-react';
 
 interface ColumnInfo {
   column: string;
@@ -73,15 +73,9 @@ export default function SchemaExplorer() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent flex items-center gap-2">
-            <Database className="w-6 h-6 text-blue-500" />
-            Schema Explorer
-          </h1>
-          <p className="text-slate-400 text-sm">
-            Active Database: <strong className="text-blue-400">{activeDatabase.name}</strong> ({activeDatabase.db_type})
-          </p>
+      <div className="flex justify-between items-center bg-slate-900 border border-darkBorder px-5 py-3 rounded-2xl">
+        <div className="text-xs text-slate-400">
+          Active Database: <strong className="text-blue-400">{activeDatabase.name}</strong> <span className="uppercase text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded ml-1.5">{activeDatabase.db_type}</span>
         </div>
         
         <button

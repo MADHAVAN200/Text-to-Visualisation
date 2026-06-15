@@ -18,6 +18,41 @@ export default function Connections() {
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [sandboxLoading, setSandboxLoading] = useState(false);
+
+  const handleLoadSandbox = async () => {
+    setSandboxLoading(true);
+    setError('');
+    setSuccess('');
+    try {
+      const res = await api.post('/databases/seed-sandbox');
+      if (res.data.warning) {
+        setSuccess('Sandbox database connected, but schema sync was postponed. You can trigger sync manually.');
+      } else {
+        setSuccess('Walkthrough Sandbox database successfully seeded and loaded with 10 tables and 5,700+ records!');
+      }
+      
+      // Fetch connections to update list
+      await fetchConnections();
+      
+      // Auto-activate the sandbox database in the UI/store
+      const loadedDb = res.data;
+      if (loadedDb && loadedDb.id) {
+        setActiveDatabase({
+          id: loadedDb.id,
+          name: loadedDb.name,
+          db_type: loadedDb.db_type,
+          database_name: loadedDb.database_name,
+          created_at: loadedDb.created_at
+        });
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.response?.data?.error || 'Failed to seed and load the sandbox database.');
+    } finally {
+      setSandboxLoading(false);
+    }
+  };
 
   // Fetch connections on load
   const fetchConnections = async () => {
@@ -122,13 +157,40 @@ export default function Connections() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
-            Database Connections
-          </h1>
-          <p className="text-slate-400 text-sm">Configure read-only connections for analytics</p>
+
+      {/* Walkthrough Sandbox Option Banner */}
+      <div className="bg-gradient-to-r from-blue-950/20 via-slate-900/40 to-emerald-950/10 border border-darkBorder rounded-2xl p-6 relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div className="absolute right-0 top-0 w-64 h-64 bg-blue-500/5 rounded-full blur-3xl pointer-events-none"></div>
+        <div className="space-y-1 relative z-10 max-w-2xl">
+          <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            Try the text2Viz AI Sandbox
+          </h2>
+          <p className="text-slate-400 text-xs leading-relaxed">
+            Don't have database credentials ready? Load our pre-populated enterprise sandbox database with <strong>10 tables</strong> and <strong>5,700+ diverse records</strong> (including Products, Suppliers, Sales, Payments, Inventory, Employees, and Customer Reviews) to instantly explore and test SQL parsing, chart building, and AI insights.
+          </p>
         </div>
+        
+        <button
+          onClick={handleLoadSandbox}
+          disabled={sandboxLoading}
+          className="mt-2 md:mt-0 bg-gradient-to-r from-blue-600 to-emerald-500 hover:from-blue-500 hover:to-emerald-400 text-white text-xs font-semibold py-2.5 px-5 rounded-xl transition-all shadow-md shadow-blue-600/10 flex items-center gap-1.5 active:scale-95 shrink-0 disabled:opacity-50"
+        >
+          {sandboxLoading ? (
+            <>
+              <RefreshCw className="w-4 h-4 animate-spin" />
+              Seeding Sandbox...
+            </>
+          ) : (
+            <>
+              <CheckCircle className="w-4 h-4" />
+              Launch Walkthrough Sandbox
+            </>
+          )}
+        </button>
       </div>
 
       {error && (

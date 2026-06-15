@@ -7,8 +7,23 @@ import {
 } from 'recharts';
 import { 
   Database, Mic, MicOff, Play, Save, RefreshCw, AlertCircle, 
-  Code, Table, BarChart2, Download, Sparkles, BookOpen, AlertTriangle
+  Code, Table, BarChart2, Download, BookOpen, AlertTriangle,
+  TrendingUp, PieChart as PieIcon, Activity, GitBranch, Check
 } from 'lucide-react';
+
+// All available chart types a user can choose from
+const CHART_TYPES = [
+  { key: 'bar',     label: 'Bar',     icon: BarChart2 },
+  { key: 'line',    label: 'Line',    icon: TrendingUp },
+  { key: 'area',    label: 'Area',    icon: Activity },
+  { key: 'pie',     label: 'Pie',     icon: PieIcon },
+  { key: 'scatter', label: 'Scatter', icon: GitBranch },
+  { key: 'table',   label: 'Table',   icon: Table },
+] as const;
+
+type ChartType = typeof CHART_TYPES[number]['key'];
+
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316'];
 
 export default function QueryWorkspace() {
   const { activeDatabase, groqApiKey } = useStore();
@@ -17,17 +32,24 @@ export default function QueryWorkspace() {
   const [results, setResults] = useState<any>(null);
   const [chartRec, setChartRec] = useState<any>(null);
   const [insights, setInsights] = useState<string[]>([]);
+  const [queryId, setQueryId] = useState<number | null>(null);
+  const [vizId, setVizId] = useState<number | null>(null);
   
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  // 'viz' shows the chart switcher, 'data' shows raw grid
   const [activeTab, setActiveTab] = useState<'viz' | 'data'>('viz');
+  // Which chart type is currently displayed
+  const [selectedChartType, setSelectedChartType] = useState<ChartType>('bar');
   const [error, setError] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
   const [dashboardsList, setDashboardsList] = useState<any[]>([]);
   const [selectedDashboard, setSelectedDashboard] = useState<string>('');
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [aiPowered, setAiPowered] = useState(false);
+  const [sqlSource, setSqlSource] = useState<string>('');
 
-  // Audio recognition hook
+  // Voice input
   const handleVoiceInput = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -38,7 +60,6 @@ export default function QueryWorkspace() {
     recognition.continuous = false;
     recognition.lang = 'en-US';
     recognition.interimResults = false;
-    
     recognition.onstart = () => setIsListening(true);
     recognition.onresult = (e: any) => {
       const transcript = e.results[0][0].transcript;
@@ -49,7 +70,6 @@ export default function QueryWorkspace() {
       setIsListening(false);
     };
     recognition.onend = () => setIsListening(false);
-    
     recognition.start();
   };
 
@@ -69,31 +89,26 @@ export default function QueryWorkspace() {
     setSaveStatus('');
     
     try {
-      let payload: any = {};
-      
-      if (sqlOverride) {
-        // Run customized SQL statement directly
-        payload = {
-          database_id: activeDatabase.id,
-          sql_query: sqlOverride,
-          question: question || "Custom SQL Execution"
-        };
-        const res = await api.post('/queries/ask', payload); // Actually triggers standard ask structure
-        setResults(res.data.results);
-        setChartRec(res.data.chart);
-        setInsights(res.data.insights);
-      } else {
-        // Run standard NLQ cycle
-        payload = {
-          question,
-          database_id: activeDatabase.id,
-          api_key: groqApiKey
-        };
-        const res = await api.post('/queries/ask', payload);
-        setSql(res.data.sql);
-        setResults(res.data.results);
-        setChartRec(res.data.chart);
-        setInsights(res.data.insights);
+      const payload: any = {
+        question: question || 'Custom SQL Execution',
+        database_id: activeDatabase.id,
+        api_key: groqApiKey,
+      };
+      if (sqlOverride) payload.sql_query = sqlOverride;
+
+      const res = await api.post('/queries/ask', payload);
+      setSql(res.data.sql || sqlOverride || '');
+      setResults(res.data.results);
+      setChartRec(res.data.chart);
+      setInsights(res.data.insights || []);
+      setQueryId(res.data.query_id || null);
+      setVizId(res.data.visualization_id || null);
+      setAiPowered(res.data.ai_powered === true);
+      setSqlSource(res.data.sql_source || '');
+
+      // Auto-set chart type from recommendation
+      if (res.data.chart?.chart_type) {
+        setSelectedChartType(res.data.chart.chart_type as ChartType);
       }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to process query. Check AI Engine log.');
@@ -115,23 +130,32 @@ export default function QueryWorkspace() {
         console.error('Failed to load dashboards', err);
       }
     };
-    if (activeDatabase) {
-      fetchDashboards();
-    }
+    if (activeDatabase) fetchDashboards();
   }, [activeDatabase, showSaveModal]);
 
   const handleSaveToDashboard = async () => {
-    if (!results || !results.success || !results.row_count) return;
+    if (!results || !results.row_count) return;
     if (!selectedDashboard) {
       alert("Please create a dashboard in the Dashboard Builder page first.");
+      return;
+    }
+    if (!vizId && !queryId) {
+      alert("Please run a query first to get a visualization.");
       return;
     }
 
     setSaveStatus('Saving...');
     try {
-      // Create widget record
+      // Look up visualization id tied to this query or use the one returned
+      let visualizationId = vizId;
+      if (!visualizationId && queryId) {
+        // Try to get it from backend
+        await api.get(`/queries/history/${queryId}`);
+        // We don't get viz_id back from history, so use the current queryId as fallback
+      }
+
       await api.post(`/dashboards/${selectedDashboard}/widgets`, {
-        visualization_id: results.visualization_id || 1, // backend queries router maps and returns this
+        visualization_id: visualizationId || 1,
         position_x: 0,
         position_y: 0,
         width: 6,
@@ -144,7 +168,7 @@ export default function QueryWorkspace() {
       }, 1500);
     } catch (err: any) {
       console.error(err);
-      setSaveStatus('Failed to save.');
+      setSaveStatus('Failed to save: ' + (err.response?.data?.error || err.message));
     }
   };
 
@@ -161,48 +185,47 @@ export default function QueryWorkspace() {
         }).join(',')
       )
     ].join('\n');
-
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `voice2viz_export_${Date.now()}.csv`);
+    link.setAttribute("download", `text2viz_export_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // Render dynamic charts
-  const renderChart = () => {
-    if (!chartRec || !results || !results.rows.length) return null;
-    const { chart_type, x_axis, y_axis, config } = chartRec;
+  // Render the currently selected chart type
+  const renderChart = (typeOverride?: ChartType) => {
+    const type = typeOverride || selectedChartType;
+    if (!chartRec || !results || !results.rows || results.rows.length === 0) return null;
+    const { x_axis, y_axis } = chartRec;
     const data = results.rows;
-    const colors = config.colors || ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
 
-    switch (chart_type) {
+    switch (type) {
       case 'bar':
         return (
           <RechartsBarChart data={data} margin={{ top: 20, right: 30, left: 10, bottom: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis dataKey={x_axis} stroke="#94a3b8" tick={{ fontSize: 11 }} />
-            <YAxis stroke="#94a3b8" tick={{ fontSize: 11 }} />
-            <Tooltip contentStyle={{ backgroundColor: '#1e293b', borderColor: '#475569', color: '#f8fafc' }} />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--slate-700)" />
+            <XAxis dataKey={x_axis} stroke="var(--slate-400)" tick={{ fontSize: 11 }} />
+            <YAxis stroke="var(--slate-400)" tick={{ fontSize: 11 }} />
+            <Tooltip contentStyle={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)', color: 'var(--slate-100)' }} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             {y_axis.map((yKey: string, idx: number) => (
-              <Bar key={yKey} dataKey={yKey} fill={colors[idx % colors.length]} radius={[4, 4, 0, 0]} />
+              <Bar key={yKey} dataKey={yKey} fill={COLORS[idx % COLORS.length]} radius={[4, 4, 0, 0]} />
             ))}
           </RechartsBarChart>
         );
       case 'line':
         return (
           <LineChart data={data} margin={{ top: 20, right: 30, left: 10, bottom: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis dataKey={x_axis} stroke="#94a3b8" tick={{ fontSize: 11 }} />
-            <YAxis stroke="#94a3b8" tick={{ fontSize: 11 }} />
-            <Tooltip contentStyle={{ backgroundColor: '#1e293b', borderColor: '#475569', color: '#f8fafc' }} />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--slate-700)" />
+            <XAxis dataKey={x_axis} stroke="var(--slate-400)" tick={{ fontSize: 11 }} />
+            <YAxis stroke="var(--slate-400)" tick={{ fontSize: 11 }} />
+            <Tooltip contentStyle={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)', color: 'var(--slate-100)' }} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             {y_axis.map((yKey: string, idx: number) => (
-              <Line key={yKey} type="monotone" dataKey={yKey} stroke={colors[idx % colors.length]} strokeWidth={2.5} activeDot={{ r: 6 }} />
+              <Line key={yKey} type="monotone" dataKey={yKey} stroke={COLORS[idx % COLORS.length]} strokeWidth={2.5} activeDot={{ r: 6 }} />
             ))}
           </LineChart>
         );
@@ -210,20 +233,20 @@ export default function QueryWorkspace() {
         return (
           <AreaChart data={data} margin={{ top: 20, right: 30, left: 10, bottom: 20 }}>
             <defs>
-              {colors.map((color: string, idx: number) => (
+              {COLORS.map((color, idx) => (
                 <linearGradient key={`grad-${idx}`} id={`colorGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor={color} stopOpacity={0.4}/>
                   <stop offset="95%" stopColor={color} stopOpacity={0}/>
                 </linearGradient>
               ))}
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis dataKey={x_axis} stroke="#94a3b8" tick={{ fontSize: 11 }} />
-            <YAxis stroke="#94a3b8" tick={{ fontSize: 11 }} />
-            <Tooltip contentStyle={{ backgroundColor: '#1e293b', borderColor: '#475569', color: '#f8fafc' }} />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--slate-700)" />
+            <XAxis dataKey={x_axis} stroke="var(--slate-400)" tick={{ fontSize: 11 }} />
+            <YAxis stroke="var(--slate-400)" tick={{ fontSize: 11 }} />
+            <Tooltip contentStyle={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)', color: 'var(--slate-100)' }} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             {y_axis.map((yKey: string, idx: number) => (
-              <Area key={yKey} type="monotone" dataKey={yKey} stroke={colors[idx % colors.length]} strokeWidth={2} fillOpacity={1} fill={`url(#colorGrad-${idx})`} />
+              <Area key={yKey} type="monotone" dataKey={yKey} stroke={COLORS[idx % COLORS.length]} strokeWidth={2} fillOpacity={1} fill={`url(#colorGrad-${idx})`} />
             ))}
           </AreaChart>
         );
@@ -242,31 +265,26 @@ export default function QueryWorkspace() {
               nameKey={x_axis}
             >
               {data.map((_: any, index: number) => (
-                <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />
+                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
               ))}
             </Pie>
-            <Tooltip contentStyle={{ backgroundColor: '#1e293b', borderColor: '#475569', color: '#f8fafc' }} />
+            <Tooltip contentStyle={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)', color: 'var(--slate-100)' }} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
           </PieChart>
         );
       case 'scatter':
         return (
           <ScatterChart margin={{ top: 20, right: 30, left: 10, bottom: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis type="number" dataKey={x_axis} name={x_axis} stroke="#94a3b8" tick={{ fontSize: 11 }} />
-            <YAxis type="number" dataKey={y_axis[0]} name={y_axis[0]} stroke="#94a3b8" tick={{ fontSize: 11 }} />
-            <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: '#1e293b', borderColor: '#475569', color: '#f8fafc' }} />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--slate-700)" />
+            <XAxis type="number" dataKey={x_axis} name={x_axis} stroke="var(--slate-400)" tick={{ fontSize: 11 }} />
+            <YAxis type="number" dataKey={y_axis[0]} name={y_axis[0]} stroke="var(--slate-400)" tick={{ fontSize: 11 }} />
+            <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)', color: 'var(--slate-100)' }} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <Scatter name="Data Points" data={data} fill="#3b82f6" />
           </ScatterChart>
         );
       default:
-        return (
-          <div className="flex flex-col items-center justify-center h-full text-slate-400 text-sm">
-            <Table className="w-8 h-8 mb-2 text-slate-500" />
-            This data formatting is best suited for tabular rendering. Check the "Data Grid" tab.
-          </div>
-        );
+        return null;
     }
   };
 
@@ -294,7 +312,6 @@ export default function QueryWorkspace() {
 
       {/* Query Bar Form */}
       <form onSubmit={(e) => handleRunQuery(e)} className="bg-darkSidebar/50 border border-darkBorder rounded-2xl p-5 shadow-lg relative overflow-hidden">
-        {/* Glow behind input */}
         <div className="absolute -top-12 -right-12 w-32 h-32 bg-blue-500/10 rounded-full blur-2xl"></div>
         
         <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
@@ -357,6 +374,13 @@ export default function QueryWorkspace() {
                   <span className="text-xs font-semibold text-slate-400 flex items-center gap-2">
                     <Code className="w-4 h-4 text-blue-400" />
                     AI SQL Generated Preview
+                    {aiPowered ? (
+                      <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                        AI Powered
+                      </span>
+                    ) : sqlSource === 'rule-based' ? (
+                      <span className="text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">Rule-based</span>
+                    ) : null}
                   </span>
                   <button
                     onClick={() => handleRunQuery(undefined, sql)}
@@ -373,19 +397,17 @@ export default function QueryWorkspace() {
               </div>
             )}
 
-            {/* Query Outputs (Chart and Grid) */}
+            {/* Query Outputs */}
             {results && (
               <div className="bg-darkSidebar/50 border border-darkBorder rounded-2xl p-6 space-y-4">
                 
-                {/* Tabs & Toolbar */}
+                {/* Tab Bar + Toolbar */}
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-darkBorder pb-4 gap-3">
                   <div className="flex border border-darkBorder bg-darkBg rounded-xl p-1">
                     <button
                       onClick={() => setActiveTab('viz')}
                       className={`flex items-center gap-2 py-1.5 px-4 text-xs font-semibold rounded-lg transition-colors ${
-                        activeTab === 'viz' 
-                          ? 'bg-blue-600 text-white' 
-                          : 'text-slate-400 hover:text-slate-200'
+                        activeTab === 'viz' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
                       <BarChart2 className="w-4 h-4" />
@@ -394,9 +416,7 @@ export default function QueryWorkspace() {
                     <button
                       onClick={() => setActiveTab('data')}
                       className={`flex items-center gap-2 py-1.5 px-4 text-xs font-semibold rounded-lg transition-colors ${
-                        activeTab === 'data' 
-                          ? 'bg-blue-600 text-white' 
-                          : 'text-slate-400 hover:text-slate-200'
+                        activeTab === 'data' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
                       <Table className="w-4 h-4" />
@@ -405,7 +425,7 @@ export default function QueryWorkspace() {
                   </div>
 
                   <div className="flex items-center gap-2 self-stretch sm:self-auto justify-end">
-                    {activeTab === 'viz' && chartRec && chartRec.chart_type !== 'table' && (
+                    {activeTab === 'viz' && selectedChartType !== 'table' && results.success && (
                       <button
                         onClick={() => setShowSaveModal(true)}
                         className="flex items-center gap-1.5 py-1.5 px-3 bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white rounded-xl shadow-sm transition-colors"
@@ -424,31 +444,91 @@ export default function QueryWorkspace() {
                   </div>
                 </div>
 
-                {/* Content rendering */}
+                {/* Content Rendering */}
                 {results.success ? (
                   <div className="min-h-[350px]">
                     {activeTab === 'viz' ? (
-                      <div className="w-full h-[360px] flex flex-col justify-between">
-                        <h3 className="text-center font-bold text-slate-200 text-sm mt-1">
-                          {chartRec?.title || 'Data Visualisation'}
-                        </h3>
-                        <div className="w-full h-[310px] mt-2">
-                          <ResponsiveContainer width="100%" height="100%">
-                            {renderChart() || (
-                              <div className="flex items-center justify-center h-full text-slate-500 text-sm">
-                                Visual rendering not supported for this dataset.
+                      <div className="space-y-4">
+
+                        {/* ── Chart Type Switcher ── */}
+                        <div className="flex flex-wrap gap-2">
+                          <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider self-center mr-1">
+                            Chart Type:
+                          </span>
+                          {CHART_TYPES.map(({ key, label, icon: Icon }) => (
+                            <button
+                              key={key}
+                              onClick={() => setSelectedChartType(key)}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+                                selectedChartType === key
+                                  ? 'bg-blue-600 border-blue-500 text-white shadow-sm shadow-blue-500/20'
+                                  : 'bg-darkBg border-darkBorder text-slate-400 hover:text-slate-200 hover:border-slate-600'
+                              }`}
+                              title={`View as ${label} chart`}
+                            >
+                              <Icon className="w-3.5 h-3.5" />
+                              {label}
+                              {chartRec?.chart_type === key && (
+                                <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1 rounded ml-0.5">AI Pick</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* ── Chart Canvas ── */}
+                        {selectedChartType === 'table' ? (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="border-b border-darkBorder text-slate-400 font-bold uppercase tracking-wider">
+                                  {results.columns.map((col: string) => (
+                                    <th key={col} className="pb-3 pl-3 py-2">{col.replace(/_/g, ' ')}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-darkBorder/40">
+                                {results.rows.slice(0, 100).map((row: any, rIdx: number) => (
+                                  <tr key={rIdx} className="hover:bg-darkSidebar/20 transition-colors">
+                                    {results.columns.map((col: string) => (
+                                      <td key={col} className="py-2.5 pl-3 font-medium text-slate-300">
+                                        {row[col] === null ? '-' : String(row[col])}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            {results.row_count > 100 && (
+                              <div className="text-center text-[10px] text-slate-500 mt-3 italic">
+                                Showing first 100 of {results.row_count} records.
                               </div>
                             )}
-                          </ResponsiveContainer>
-                        </div>
+                          </div>
+                        ) : (
+                          <div className="w-full h-[340px]">
+                            <h3 className="text-center font-bold text-slate-200 text-sm mb-2">
+                              {chartRec?.title || question}
+                            </h3>
+                            <div className="w-full h-[300px]">
+                              <ResponsiveContainer width="100%" height="100%">
+                                {renderChart() || (
+                                  <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+                                    Switch to a different chart type — this data may not support {selectedChartType} rendering.
+                                  </div>
+                                )}
+                              </ResponsiveContainer>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ) : (
+                      /* Data Grid Tab */
                       <div className="overflow-x-auto">
                         <table className="w-full text-left border-collapse text-xs">
                           <thead>
                             <tr className="border-b border-darkBorder text-slate-400 font-bold uppercase tracking-wider">
                               {results.columns.map((col: string) => (
-                                <th key={col} className="pb-3 pl-3 py-2">{col.replace('_', ' ')}</th>
+                                <th key={col} className="pb-3 pl-3 py-2">{col.replace(/_/g, ' ')}</th>
                               ))}
                             </tr>
                           </thead>
@@ -486,11 +566,9 @@ export default function QueryWorkspace() {
           {/* Right insights sidebar */}
           <div className="xl:col-span-1 space-y-6">
             <div className="bg-darkSidebar/50 border border-darkBorder rounded-2xl p-5 shadow-lg relative overflow-hidden">
-              {/* Background gradient pill */}
               <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-xl"></div>
               
               <h2 className="text-base font-bold text-slate-200 flex items-center gap-2 mb-4 border-b border-darkBorder/60 pb-3">
-                <Sparkles className="w-4 h-4 text-emerald-400" />
                 AI Narrative Insights
               </h2>
 
@@ -509,6 +587,30 @@ export default function QueryWorkspace() {
                   ))}
                 </ul>
               )}
+
+              {/* Current chart type indicator */}
+              {results?.success && activeTab === 'viz' && (
+                <div className="mt-4 pt-4 border-t border-darkBorder/40">
+                  <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Viewing As</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {CHART_TYPES.map(({ key, label, icon: Icon }) => (
+                      <button
+                        key={key}
+                        onClick={() => setSelectedChartType(key)}
+                        title={`Switch to ${label}`}
+                        className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold border transition-all ${
+                          selectedChartType === key
+                            ? 'bg-blue-600 border-blue-500 text-white'
+                            : 'bg-darkBg border-darkBorder text-slate-500 hover:text-slate-300'
+                        }`}
+                      >
+                        <Icon className="w-3 h-3" />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -517,9 +619,14 @@ export default function QueryWorkspace() {
       {/* Save Widget Modal Dialog */}
       {showSaveModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-darkSidebar border border-darkBorder w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-darkSidebar border border-darkBorder w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4">
             <div className="flex justify-between items-center border-b border-darkBorder pb-3">
-              <h3 className="font-bold text-slate-200">Save Visualization</h3>
+              <div>
+                <h3 className="font-bold text-slate-200">Save Visualization</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Saving as <span className="font-semibold text-blue-400 capitalize">{selectedChartType}</span> chart
+                </p>
+              </div>
               <button 
                 type="button" 
                 onClick={() => setShowSaveModal(false)}
@@ -549,7 +656,10 @@ export default function QueryWorkspace() {
                 </div>
 
                 {saveStatus && (
-                  <div className="text-xs text-slate-400 font-semibold">{saveStatus}</div>
+                  <div className={`text-xs font-semibold flex items-center gap-2 ${saveStatus.includes('success') ? 'text-emerald-400' : saveStatus.includes('Failed') ? 'text-red-400' : 'text-slate-400'}`}>
+                    {saveStatus.includes('success') && <Check className="w-3.5 h-3.5" />}
+                    {saveStatus}
+                  </div>
                 )}
 
                 <div className="flex gap-3 pt-2">
