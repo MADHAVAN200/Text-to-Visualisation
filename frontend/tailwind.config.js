@@ -7,9 +7,9 @@ export default {
   theme: {
     extend: {
       colors: {
-        darkBg: 'var(--bg-main)',
-        darkSidebar: 'var(--bg-sidebar)',
-        darkBorder: 'var(--border-color)',
+        darkBg: 'rgb(var(--bg-main) / <alpha-value>)',
+        darkSidebar: 'rgb(var(--bg-sidebar) / <alpha-value>)',
+        darkBorder: 'rgb(var(--border-color) / <alpha-value>)',
         accentBlue: '#3b82f6',
         accentGreen: '#10b981',
         accentAmber: '#f59e0b',

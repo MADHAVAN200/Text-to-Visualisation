@@ -269,6 +269,8 @@ async function recommendChart(question, columns, rows, apiKey) {
   const numericCols = columns.filter(col => rows.length > 0 && typeof rows[0][col] === 'number');
   const categoricalCols = columns.filter(col => !numericCols.includes(col));
 
+  let result = null;
+
   if (groq && rows && rows.length > 0) {
     try {
       const prompt = `You are a data visualization expert.
@@ -280,11 +282,11 @@ Total rows: ${rows.length}
 Numeric columns: ${numericCols.join(', ') || 'none'}
 Text/Category columns: ${categoricalCols.join(', ') || 'none'}
 
-Choose the BEST chart type from: bar, line, area, pie, scatter, table.
+Choose the BEST chart type from: bar, line, area, pie, scatter, table, kpi.
 Respond ONLY with a JSON object like:
 {"chart_type": "bar", "x_axis": "column_name", "y_axis": ["metric_col"], "reason": "one sentence"}
 
-Use bar for comparisons, line/area for time trends, pie for proportions (<=8 categories), scatter for correlations, table for text-heavy results.`;
+Use kpi for single key-value cards (e.g. total revenue, overall counts, summary aggregations), bar for comparisons, line/area for time trends, pie for proportions (<=8 categories), scatter for correlations, table for text-heavy results.`;
 
       const response = await groq.chat.completions.create({
         model: FALLBACK_MODEL, // Fast model for this quick decision
@@ -298,11 +300,11 @@ Use bar for comparisons, line/area for time trends, pie for proportions (<=8 cat
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
-        if (parsed.chart_type && parsed.x_axis && parsed.y_axis) {
+        if (parsed.chart_type && (parsed.chart_type === 'kpi' || parsed.x_axis) && parsed.y_axis) {
           console.log(`[AI Engine] Chart type "${parsed.chart_type}" recommended by LLM. Reason: ${parsed.reason || 'N/A'}`);
-          return {
+          result = {
             chart_type: parsed.chart_type,
-            x_axis: parsed.x_axis,
+            x_axis: parsed.x_axis || '',
             y_axis: Array.isArray(parsed.y_axis) ? parsed.y_axis : [parsed.y_axis],
             title: question,
             config: { colors: COLORS, reason: parsed.reason }
@@ -314,12 +316,55 @@ Use bar for comparisons, line/area for time trends, pie for proportions (<=8 cat
     }
   }
 
-  // Heuristic fallback
-  return recommendChartHeuristic(question, columns, rows, numericCols, categoricalCols, COLORS);
+  if (!result) {
+    // Heuristic fallback
+    result = recommendChartHeuristic(question, columns, rows, numericCols, categoricalCols, COLORS);
+  }
+
+  // Post-processing override to guarantee single-row overall KPI metrics show as KPI cards
+  if (result && rows && rows.length === 1) {
+    const qLower = question.toLowerCase();
+    const isKpiQ = qLower.includes('total') || qLower.includes('sum') || qLower.includes('count') || qLower.includes('overall') || qLower.includes('kpi') || qLower.includes('card') || qLower.includes('average') || qLower.includes('avg');
+    
+    if (categoricalCols.length === 0 || isKpiQ) {
+      result.chart_type = 'kpi';
+      if (!result.y_axis || result.y_axis.length === 0) {
+        result.y_axis = numericCols.slice(0, 1);
+      } else {
+        const validY = result.y_axis.filter(y => numericCols.includes(y));
+        result.y_axis = validY.length > 0 ? validY.slice(0, 1) : numericCols.slice(0, 1);
+      }
+      result.x_axis = columns[0] || '';
+    }
+  }
+
+  return result;
 }
 
 function recommendChartHeuristic(question, columns, rows, numericCols, categoricalCols, colors) {
   const q = question.toLowerCase();
+
+  const isKpiQuestion = q.includes('total') || q.includes('sum') || q.includes('count') || q.includes('overall') || q.includes('kpi') || q.includes('card') || q.includes('average') || q.includes('avg');
+  
+  if (rows.length === 1 && numericCols.length >= 1) {
+    let selectedCol = numericCols[0];
+    if (isKpiQuestion) {
+      if (q.includes('revenue') || q.includes('sales') || q.includes('amount')) {
+        const match = numericCols.find(c => c.toLowerCase().includes('revenue') || c.toLowerCase().includes('sales') || c.toLowerCase().includes('amount') || c.toLowerCase().includes('total'));
+        if (match) selectedCol = match;
+      } else if (q.includes('order') || q.includes('count')) {
+        const match = numericCols.find(c => c.toLowerCase().includes('order') || c.toLowerCase().includes('count'));
+        if (match) selectedCol = match;
+      }
+    }
+    return { chart_type: 'kpi', x_axis: columns[0] || '', y_axis: [selectedCol], title: question, config: { colors } };
+  }
+
+  if (isKpiQuestion) {
+    if (numericCols.length === 1 && rows.length <= 10) {
+      return { chart_type: 'kpi', x_axis: columns[0] || '', y_axis: numericCols, title: question, config: { colors } };
+    }
+  }
 
   if (categoricalCols.length >= 1 && numericCols.length >= 1) {
     if (q.includes('trend') || q.includes('month') || q.includes('time') || q.includes('date') || q.includes('year') || q.includes('weekly') || q.includes('daily')) {

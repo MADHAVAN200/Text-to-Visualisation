@@ -94,6 +94,7 @@ def create_metadata_db(db_path):
         user_id INTEGER,
         name TEXT,
         description TEXT,
+        layout_json TEXT,
         created_at DATETIME
     );
     """)

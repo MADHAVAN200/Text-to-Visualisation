@@ -157,6 +157,22 @@ router.get('/:id/schema', (req, res) => {
   );
 });
 
+// Get table preview data
+router.get('/:id/preview/:tableName', async (req, res) => {
+  const dbId = req.params.id;
+  const tableName = req.params.tableName;
+  const db = req.app.get('db');
+
+  try {
+    const queriesRouter = require('./queries');
+    const result = await queriesRouter.executeQuery(dbId, `SELECT * FROM "${tableName}" LIMIT 100`, db);
+    res.json(result);
+  } catch (err) {
+    console.error(`Preview execution error for table ${tableName}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Delete a connection
 router.delete('/:id', (req, res) => {
   const dbId = req.params.id;

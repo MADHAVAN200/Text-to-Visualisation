@@ -85,6 +85,61 @@ router.get('/:id', (req, res) => {
   });
 });
 
+// PUT /:id/report - Persist the full free-form report canvas (Power BI-grade builder).
+// Stores the serialized ReportState blob in dashboards.layout_json (source of truth
+// for the new builder) and, best-effort, mirrors SQL-backed chart widgets into the
+// legacy dashboard_widgets table so older readers (Dashboard home, legacy GET) still
+// render. Non-chart widgets (text, slicer, narrative) live only in layout_json.
+router.put('/:id/report', (req, res) => {
+  const dashboardId = req.params.id;
+  const { layout_json, widgets } = req.body;
+  const db = req.app.get('db');
+
+  if (typeof layout_json !== 'string') {
+    return res.status(400).json({ error: 'layout_json (string) is required.' });
+  }
+
+  db.run(
+    `UPDATE dashboards SET layout_json = ? WHERE id = ?`,
+    [layout_json, dashboardId],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      if (this.changes === 0) return res.status(404).json({ error: 'Dashboard not found.' });
+
+      // Best-effort legacy mirror. Never fatal: layout_json remains authoritative.
+      if (Array.isArray(widgets)) {
+        const valid = widgets.filter(w => w && w.visualization_id);
+        db.serialize(() => {
+          db.run(`DELETE FROM dashboard_widgets WHERE dashboard_id = ?`, [dashboardId], (delErr) => {
+            if (delErr) console.warn('[Report Save] Legacy widget clear failed:', delErr.message);
+          });
+          if (valid.length > 0) {
+            const stmt = db.prepare(
+              `INSERT INTO dashboard_widgets (dashboard_id, visualization_id, position_x, position_y, width, height)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            );
+            valid.forEach(w => {
+              stmt.run([
+                dashboardId,
+                w.visualization_id,
+                Math.round(w.position_x || 0),
+                Math.round(w.position_y || 0),
+                Math.round(w.width || 6),
+                Math.round(w.height || 4),
+              ], (insErr) => {
+                if (insErr) console.warn('[Report Save] Legacy widget insert failed:', insErr.message);
+              });
+            });
+            stmt.finalize();
+          }
+        });
+      }
+
+      res.json({ success: true, message: 'Report layout saved.' });
+    }
+  );
+});
+
 // Delete a dashboard and its widgets
 router.delete('/:id', (req, res) => {
   const dashboardId = req.params.id;
@@ -245,15 +300,16 @@ router.post('/recommend', async (req, res) => {
 Here is the Database Schema:
 ${schemaText}
 
-Please recommend exactly 4 highly relevant, analytical business questions that a user would want to visualize on a dashboard.
+Please recommend exactly 5 highly relevant, analytical business questions that a user would want to visualize on a dashboard: 2 overall metrics/KPI cards (e.g. overall total sales or total counts) and 3 chart comparison/trend questions (e.g. total sales by category, monthly order trends, top products).
 Provide the questions in a clean list, one per line. Do not add numbers, introductions, bullet characters (* or -), or descriptions. Just the raw question text.
 Ensure they are readable questions.
 
 Example output:
+Total revenue overall
+Total count of orders
 Total revenue by product category
 Monthly orders trend over time
-Top 10 highest-value customers
-Inventory stock levels by warehouse`;
+Top 10 highest-value customers`;
 
           const response = await groq.chat.completions.create({
             model: 'llama-3.1-8b-instant',
@@ -269,7 +325,7 @@ Inventory stock levels by warehouse`;
             .filter(q => q.length > 5);
 
           if (parsedQuestions.length >= 2) {
-            recommendedQuestions = parsedQuestions.slice(0, 4);
+            recommendedQuestions = parsedQuestions.slice(0, 5);
           }
         } catch (err) {
           console.warn('[AI Recommendation] Failed to generate custom questions, using templates:', err.message);
@@ -279,10 +335,11 @@ Inventory stock levels by warehouse`;
       // Templates fallback for default sandbox sales DB if LLM fails or is offline
       if (recommendedQuestions.length === 0) {
         recommendedQuestions = [
+          "Overall total sales revenue",
+          "Total count of orders",
           "What are the total sales by category?",
           "Show the monthly sales trend.",
-          "Top 5 products by revenue.",
-          "Count of customers by segment."
+          "Top 5 products by revenue."
         ];
       }
 
@@ -374,13 +431,24 @@ Inventory stock levels by warehouse`;
       });
     };
 
+    let currentX = 0;
+    let currentY = 0;
     for (let i = 0; i < uniqueVizs.length; i++) {
       const viz = uniqueVizs[i];
-      const x = (i % 2) * 6;
-      const y = Math.floor(i / 2) * 4;
-      const w = 6;
-      const h = 4;
-      await insertWidget(viz.visualization_id, x, y, w, h);
+      let w = 6;
+      let h = 4;
+      if (viz.chart_type === 'kpi') {
+        w = 3;
+        h = 3;
+      }
+      
+      if (currentX + w > 12) {
+        currentX = 0;
+        currentY += 4;
+      }
+      
+      await insertWidget(viz.visualization_id, currentX, currentY, w, h);
+      currentX += w;
     }
 
     res.json({

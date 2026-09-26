@@ -33,3 +33,13 @@ build/
 .idea/
 .DS_Store
 Thumbs.db
+
+*.db-shm
+*.db-wal
+.claude/
+
+# Video generator and brag artifacts
+*brag*
+brag/
+brag-output/
+share-copy.txt

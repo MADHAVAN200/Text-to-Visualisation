@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import api from '../api';
+import ExcelGrid from '../components/ExcelGrid';
 import { 
   BarChart as RechartsBarChart, Bar, LineChart, Line, PieChart, Pie, AreaChart, Area, ScatterChart, Scatter,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, ResponsiveContainer 
 } from 'recharts';
 import { 
-  Database, Mic, MicOff, Play, Save, RefreshCw, AlertCircle, 
+  Mic, MicOff, Play, Save, RefreshCw, AlertCircle, 
   Code, Table, BarChart2, Download, BookOpen, AlertTriangle,
-  TrendingUp, PieChart as PieIcon, Activity, GitBranch, Check
+  TrendingUp, PieChart as PieIcon, Activity, GitBranch, Check, ChevronDown
 } from 'lucide-react';
 
 // All available chart types a user can choose from
@@ -46,6 +47,7 @@ export default function QueryWorkspace() {
   const [dashboardsList, setDashboardsList] = useState<any[]>([]);
   const [selectedDashboard, setSelectedDashboard] = useState<string>('');
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [isDashboardDropdownOpen, setIsDashboardDropdownOpen] = useState(false);
   const [aiPowered, setAiPowered] = useState(false);
   const [sqlSource, setSqlSource] = useState<string>('');
 
@@ -108,7 +110,11 @@ export default function QueryWorkspace() {
 
       // Auto-set chart type from recommendation
       if (res.data.chart?.chart_type) {
-        setSelectedChartType(res.data.chart.chart_type as ChartType);
+        if (res.data.chart.chart_type === 'kpi') {
+          setSelectedChartType('table');
+        } else {
+          setSelectedChartType(res.data.chart.chart_type as ChartType);
+        }
       }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to process query. Check AI Engine log.');
@@ -132,6 +138,12 @@ export default function QueryWorkspace() {
     };
     if (activeDatabase) fetchDashboards();
   }, [activeDatabase, showSaveModal]);
+
+  useEffect(() => {
+    if (!showSaveModal) {
+      setIsDashboardDropdownOpen(false);
+    }
+  }, [showSaveModal]);
 
   const handleSaveToDashboard = async () => {
     if (!results || !results.row_count) return;
@@ -209,7 +221,7 @@ export default function QueryWorkspace() {
             <CartesianGrid strokeDasharray="3 3" stroke="var(--slate-700)" />
             <XAxis dataKey={x_axis} stroke="var(--slate-400)" tick={{ fontSize: 11 }} />
             <YAxis stroke="var(--slate-400)" tick={{ fontSize: 11 }} />
-            <Tooltip contentStyle={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)', color: 'var(--slate-100)' }} />
+            <Tooltip cursor={{ fill: 'var(--tooltip-cursor-fill)' }} contentStyle={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)', color: 'var(--slate-100)' }} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             {y_axis.map((yKey: string, idx: number) => (
               <Bar key={yKey} dataKey={yKey} fill={COLORS[idx % COLORS.length]} radius={[4, 4, 0, 0]} />
@@ -291,22 +303,12 @@ export default function QueryWorkspace() {
   return (
     <div className="space-y-6">
       {/* Active Database Alert Banner */}
-      {!activeDatabase ? (
+      {!activeDatabase && (
         <div className="p-4 bg-amber-950/40 border border-amber-500/30 text-amber-200 text-sm rounded-xl flex items-center gap-3">
           <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
           <div>
             <strong>No active database connected.</strong> Please navigate to the <a href="/connections" className="underline text-amber-400 font-semibold">Connections</a> page, add a SQLite or other database, and set it as active.
           </div>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 text-xs bg-slate-900 border border-darkBorder w-fit px-3 py-1.5 rounded-full text-slate-300">
-          <Database className="w-3.5 h-3.5 text-blue-500" />
-          <span>Connection:</span>
-          <strong className="text-blue-400">{activeDatabase.name}</strong>
-          <span className="text-slate-500">|</span>
-          <span className="uppercase text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">
-            {activeDatabase.db_type}
-          </span>
         </div>
       )}
 
@@ -477,33 +479,7 @@ export default function QueryWorkspace() {
 
                         {/* ── Chart Canvas ── */}
                         {selectedChartType === 'table' ? (
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-left border-collapse text-xs">
-                              <thead>
-                                <tr className="border-b border-darkBorder text-slate-400 font-bold uppercase tracking-wider">
-                                  {results.columns.map((col: string) => (
-                                    <th key={col} className="pb-3 pl-3 py-2">{col.replace(/_/g, ' ')}</th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-darkBorder/40">
-                                {results.rows.slice(0, 100).map((row: any, rIdx: number) => (
-                                  <tr key={rIdx} className="hover:bg-darkSidebar/20 transition-colors">
-                                    {results.columns.map((col: string) => (
-                                      <td key={col} className="py-2.5 pl-3 font-medium text-slate-300">
-                                        {row[col] === null ? '-' : String(row[col])}
-                                      </td>
-                                    ))}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                            {results.row_count > 100 && (
-                              <div className="text-center text-[10px] text-slate-500 mt-3 italic">
-                                Showing first 100 of {results.row_count} records.
-                              </div>
-                            )}
-                          </div>
+                          <ExcelGrid columns={results.columns} rows={results.rows} />
                         ) : (
                           <div className="w-full h-[340px]">
                             <h3 className="text-center font-bold text-slate-200 text-sm mb-2">
@@ -522,34 +498,7 @@ export default function QueryWorkspace() {
                         )}
                       </div>
                     ) : (
-                      /* Data Grid Tab */
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse text-xs">
-                          <thead>
-                            <tr className="border-b border-darkBorder text-slate-400 font-bold uppercase tracking-wider">
-                              {results.columns.map((col: string) => (
-                                <th key={col} className="pb-3 pl-3 py-2">{col.replace(/_/g, ' ')}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-darkBorder/40">
-                            {results.rows.slice(0, 100).map((row: any, rIdx: number) => (
-                              <tr key={rIdx} className="hover:bg-darkSidebar/20 transition-colors">
-                                {results.columns.map((col: string) => (
-                                  <td key={col} className="py-2.5 pl-3 font-medium text-slate-300">
-                                    {row[col] === null ? '-' : String(row[col])}
-                                  </td>
-                                ))}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                        {results.row_count > 100 && (
-                          <div className="text-center text-[10px] text-slate-500 mt-3 italic">
-                            Showing first 100 of {results.row_count} records.
-                          </div>
-                        )}
-                      </div>
+                      <ExcelGrid columns={results.columns} rows={results.rows} />
                     )}
                   </div>
                 ) : (
@@ -644,15 +593,50 @@ export default function QueryWorkspace() {
               <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Select Dashboard</label>
-                  <select
-                    className="w-full bg-darkBg border border-darkBorder rounded-xl p-2.5 text-slate-200 text-sm focus:outline-none focus:border-blue-500"
-                    value={selectedDashboard}
-                    onChange={(e) => setSelectedDashboard(e.target.value)}
-                  >
-                    {dashboardsList.map(d => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))}
-                  </select>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsDashboardDropdownOpen(!isDashboardDropdownOpen)}
+                      className="w-full flex items-center justify-between gap-2 bg-darkBg border border-darkBorder rounded-xl p-2.5 text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer text-left"
+                    >
+                      <span>
+                        {dashboardsList.find(d => d.id.toString() === selectedDashboard)?.name || 'Select Dashboard'}
+                      </span>
+                      <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${isDashboardDropdownOpen ? 'transform rotate-180' : ''}`} />
+                    </button>
+
+                    {isDashboardDropdownOpen && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-40"
+                          onClick={() => setIsDashboardDropdownOpen(false)}
+                        />
+                        <div className="absolute left-0 right-0 mt-1.5 rounded-xl bg-darkSidebar border border-darkBorder shadow-xl py-1.5 z-50 max-h-60 overflow-y-auto">
+                          {dashboardsList.map((d) => {
+                            const isSelected = d.id.toString() === selectedDashboard;
+                            return (
+                              <button
+                                key={d.id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedDashboard(d.id.toString());
+                                  setIsDashboardDropdownOpen(false);
+                                }}
+                                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs text-left transition-colors font-medium ${
+                                  isSelected
+                                    ? 'bg-blue-600/15 text-blue-500 dark:text-blue-400 font-bold'
+                                    : 'text-slate-300 hover:bg-slate-800 hover:text-slate-100'
+                                }`}
+                              >
+                                <span>{d.name}</span>
+                                {isSelected && <Check className="h-3.5 w-3.5 text-blue-500 dark:text-blue-400 shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
 
                 {saveStatus && (

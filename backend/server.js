@@ -23,6 +23,18 @@ const db = new sqlite3.Database(dbPath, (err) => {
       db.run('PRAGMA journal_mode=WAL;');
       db.run('PRAGMA busy_timeout=5000;'); // Wait up to 5s if database is locked
       db.run('PRAGMA synchronous=NORMAL;'); // Balance safety and performance
+
+      // Backward-compatible migration: add layout_json to dashboards for the
+      // Power BI-grade free-form report canvas. Existing dashboards keep a NULL
+      // value and are reconstructed from dashboard_widgets on load. Idempotent —
+      // the "duplicate column name" error on subsequent boots is expected/ignored.
+      db.run('ALTER TABLE dashboards ADD COLUMN layout_json TEXT', (alterErr) => {
+        if (alterErr && !/duplicate column name/i.test(alterErr.message)) {
+          console.warn('[Migration] Could not add dashboards.layout_json:', alterErr.message);
+        } else if (!alterErr) {
+          console.log('[Migration] Added dashboards.layout_json column.');
+        }
+      });
     });
   }
 });
@@ -55,11 +67,13 @@ const authRouter = require('./routes/auth');
 const databasesRouter = require('./routes/databases');
 const queriesRouter = require('./routes/queries');
 const dashboardsRouter = require('./routes/dashboards');
+const aiRouter = require('./routes/ai');
 
 app.use('/api/auth', authRouter);
 app.use('/api/databases', databasesRouter);
 app.use('/api/queries', queriesRouter);
 app.use('/api/dashboards', dashboardsRouter);
+app.use('/api/ai', aiRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {

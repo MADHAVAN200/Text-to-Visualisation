@@ -1,4 +1,15 @@
 # Voice2Viz AI
+
+<div align="center">
+
+[![Voice2Viz AI Platform Walkthrough](./demo.gif)](./demo.mp4)
+
+<p align="center">
+  <a href="./demo.mp4"><strong>Watch High-Definition Video Walkthrough (demo.mp4)</strong></a>
+</p>
+
+</div>
+
 ### AI-Powered Natural Language Analytics & Visualisation Platform
 
 Voice2Viz AI enables non-technical users to query database engines (SQLite, MySQL, PostgreSQL) using plain English or spoken voice, instantly generating SQL queries, executing them, displaying tabular results, recommending visual charts, and creating AI-driven insights.
