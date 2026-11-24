@@ -37,8 +37,8 @@ def generate_insights_rule_based(query_results: dict) -> list[str]:
             min_idx = df[num_col].idxmin()
             
             # Format nicely
-            lbl_total = f"${total_val:,.2f}" if "amount" in num_col or "revenue" in num_col or "price" in num_col else f"{int(total_val):,}" if total_val.is_integer() else f"{total_val:,.2f}"
-            lbl_avg = f"${avg_val:,.2f}" if "amount" in num_col or "revenue" in num_col or "price" in num_col else f"{avg_val:,.2f}"
+            lbl_total = f"{int(total_val):,}" if total_val.is_integer() else f"{total_val:,.2f}"
+            lbl_avg = f"{avg_val:,.2f}"
             
             insights.append(f"The total cumulative **{num_col.replace('_', ' ')}** is **{lbl_total}**, with an average of **{lbl_avg}** per row.")
 
@@ -50,15 +50,15 @@ def generate_insights_rule_based(query_results: dict) -> list[str]:
                 max_val = df.loc[max_idx, num_col]
                 min_val = df.loc[min_idx, num_col]
                 
-                lbl_max = f"${max_val:,.2f}" if "amount" in num_col or "revenue" in num_col or "price" in num_col else f"{max_val:,.2f}"
-                lbl_min = f"${min_val:,.2f}" if "amount" in num_col or "revenue" in num_col or "price" in num_col else f"{min_val:,.2f}"
+                lbl_max = f"{max_val:,.2f}"
+                lbl_min = f"{min_val:,.2f}"
                 
                 if max_cat != min_cat:
                     insights.append(f"**Highest performing category/item:** **{max_cat}** ({lbl_max}).")
                     insights.append(f"**Lowest performing category/item:** **{min_cat}** ({lbl_min}).")
             else:
                 max_val = df.loc[max_idx, num_col]
-                lbl_max = f"${max_val:,.2f}" if "amount" in num_col or "revenue" in num_col or "price" in num_col else f"{max_val:,.2f}"
+                lbl_max = f"{max_val:,.2f}"
                 insights.append(f"The maximum recorded **{num_col.replace('_', ' ')}** is **{lbl_max}**.")
 
     # Insight 3: Analyze growth trend if temporal data is available

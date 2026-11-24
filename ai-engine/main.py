@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException
+import os
+import secrets
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uvicorn
@@ -13,6 +16,15 @@ from chart_selector import recommend_chart
 from insight_generator import generate_insights
 
 app = FastAPI(title="Voice2Viz AI Engine", version="1.0")
+
+@app.middleware("http")
+async def require_service_identity(request: Request, call_next):
+    if request.url.path != "/health":
+        expected = os.getenv("AI_ENGINE_SERVICE_TOKEN")
+        supplied = request.headers.get("x-service-token", "")
+        if not expected or not secrets.compare_digest(expected, supplied):
+            return JSONResponse({"detail": "Service authentication required"}, status_code=401)
+    return await call_next(request)
 
 # Request/Response schemas
 class SchemaParseRequest(BaseModel):

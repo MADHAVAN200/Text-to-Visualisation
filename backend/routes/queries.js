@@ -20,6 +20,7 @@ const router   = express.Router();
 const path     = require('path');
 const sqlite3  = require('sqlite3').verbose();
 
+const owns = require('../ownership');
 const aiEngine = require('./ai-engine');
 
 const PROJECT_ROOT  = path.resolve(__dirname, '../../');
@@ -68,27 +69,12 @@ async function executeQuery(dbId, sqlQuery, metaDb) {
     return executeSqliteQuery(dbFilePath, sqlQuery);
   }
 
-  // PostgreSQL / MySQL support (requires Python engine or future native driver)
-  throw new Error(`Direct execution for ${params.db_type} databases requires the Python AI Engine. Please start it or use SQLite.`);
+  const start = Date.now();
+  const result = await require('../remote-source').withSession(params,query=>query(sqlQuery));
+  return {...result,executionTime:(Date.now()-start)/1000};
 }
 
 // ── User ID from JWT ──────────────────────────────────────────────────────────
-
-function extractUserId(req) {
-  const authHeader = req.headers['authorization'];
-  if (!authHeader) return 1;
-  try {
-    const token = authHeader.split(' ')[1];
-    const jwt = require('jsonwebtoken');
-    const secret = process.env.JWT_SECRET || 'voice2viz_jwt_secret_key_12345';
-    const decoded = jwt.verify(token, secret);
-    return decoded.id || 1;
-  } catch {
-    return 1;
-  }
-}
-
-// ── Save results to metadata DB ───────────────────────────────────────────────
 
 function saveQueryAndVisualization(metaDb, { userId, dbId, question, sql, executionTime, chart, insights, createdAt }) {
   return new Promise((resolve) => {
@@ -128,10 +114,10 @@ function saveQueryAndVisualization(metaDb, { userId, dbId, question, sql, execut
 
 // ── POST /queries/ask ─────────────────────────────────────────────────────────
 
-router.post('/ask', async (req, res) => {
+router.post('/ask', owns('database', r => r.body.database_id), async (req, res) => {
   const { question, database_id, api_key, sql_query } = req.body;
   const metaDb  = req.app.get('db');
-  const userId  = extractUserId(req);
+  const userId  = req.user.id;
   const createdAt = new Date().toISOString();
 
   // Resolve API key: frontend-supplied key > .env GROQ_API_KEY
@@ -176,7 +162,7 @@ router.post('/ask', async (req, res) => {
 
     // ── Cache Layer: Check if results already exist ──────────────────────────
     const crypto = require('crypto');
-    const queryHash = crypto.createHash('md5').update(`${database_id}_${finalSql}`).digest('hex');
+    const queryHash = crypto.createHash('md5').update(JSON.stringify([userId, database_id, question, finalSql])).digest('hex');
 
     const cachedResponse = await new Promise((resolve) => {
       metaDb.get(
@@ -328,7 +314,7 @@ router.post('/ask', async (req, res) => {
       );
     } catch (_) {}
 
-    return res.status(500).json({ error: err.message });
+    return res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -341,8 +327,8 @@ router.get('/history', (req, res) => {
             d.name AS database_name
      FROM query_history q
      LEFT JOIN connected_databases d ON q.database_id = d.id
-     ORDER BY q.created_at DESC LIMIT 50`,
-    [],
+     WHERE q.user_id = ? AND d.user_id = q.user_id ORDER BY q.created_at DESC LIMIT 50`,
+    [req.user.id],
     (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
       res.json(rows);
@@ -352,7 +338,7 @@ router.get('/history', (req, res) => {
 
 // ── GET /queries/history/:id ──────────────────────────────────────────────────
 
-router.get('/history/:id', async (req, res) => {
+router.get('/history/:id', owns('query', r => r.params.id), async (req, res) => {
   const queryId = req.params.id;
   const metaDb  = req.app.get('db');
 
@@ -402,6 +388,7 @@ router.get('/history/:id', async (req, res) => {
   });
 });
 
+router.getDbConnectionParams = getDbConnectionParams;
 router.executeQuery = executeQuery;
 router.saveQueryAndVisualization = saveQueryAndVisualization;
 

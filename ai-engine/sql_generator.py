@@ -43,101 +43,8 @@ def get_database_schema_text(database_id, metadata_db_path="ai-engine/metadata.d
     return schema_text
 
 def generate_sql_rule_based(question: str, schema_text: str) -> str:
-    """
-    A smart rule-based local NLP fallback that matches questions and generates
-    correct SQL for the sample_sales.db schema when no Groq API Key is present.
-    """
-    q = question.lower().strip()
-    
-    # 1. Top 10 products by revenue
-    if "top" in q and "products" in q and ("revenue" in q or "sales" in q or "amount" in q):
-        limit = 10
-        limit_match = re.search(r'top\s+(\d+)', q)
-        if limit_match:
-            limit = int(limit_match.group(1))
-        return f"""SELECT p.name AS product_name, c.name AS category, SUM(s.total_amount) AS total_revenue
-FROM sales s
-JOIN products p ON s.product_id = p.id
-JOIN categories c ON p.category_id = c.id
-GROUP BY p.id, p.name, c.name
-ORDER BY total_revenue DESC
-LIMIT {limit};"""
-
-    # 2. Sales / Revenue by Category
-    if "sales" in q or "revenue" in q or "amount" in q:
-        if "category" in q or "categories" in q:
-            return """SELECT c.name AS category_name, SUM(s.total_amount) AS total_sales, COUNT(s.id) AS order_count
-FROM sales s
-JOIN products p ON s.product_id = p.id
-JOIN categories c ON p.category_id = c.id
-GROUP BY c.id, c.name
-ORDER BY total_sales DESC;"""
-
-        # 3. Monthly Sales / Revenue Over Time
-        if "month" in q or "monthly" in q or "time" in q or "trend" in q:
-            # Check if a specific year is mentioned
-            year_clause = ""
-            if "2025" in q:
-                year_clause = "WHERE sale_date LIKE '2025%'"
-            elif "2026" in q:
-                year_clause = "WHERE sale_date LIKE '2026%'"
-            
-            return f"""SELECT strftime('%Y-%m', sale_date) AS month, SUM(total_amount) AS revenue, COUNT(id) AS sales_count
-FROM sales
-{year_clause}
-GROUP BY month
-ORDER BY month ASC;"""
-
-    # 4. Customers by City / Country / Region
-    if "customer" in q or "customers" in q:
-        if "city" in q or "cities" in q:
-            return """SELECT city, COUNT(id) AS customer_count
-FROM customers
-GROUP BY city
-ORDER BY customer_count DESC;"""
-        if "country" in q or "countries" in q:
-            return """SELECT country, COUNT(id) AS customer_count
-FROM customers
-GROUP BY country
-ORDER BY customer_count DESC;"""
-        if "segment" in q:
-            return """SELECT segment, COUNT(id) AS customer_count
-FROM customers
-GROUP BY segment
-ORDER BY customer_count DESC;"""
-        
-        # Show all customers or similar
-        return """SELECT name, email, city, country, segment, date(created_at) AS join_date 
-FROM customers 
-ORDER BY created_at DESC 
-LIMIT 20;"""
-
-    # 5. Products list or stock info
-    if "product" in q or "products" in q:
-        if "stock" in q or "quantity" in q or "inventory" in q:
-            return """SELECT p.name AS product_name, c.name AS category, p.stock_quantity, p.unit_price
-FROM products p
-JOIN categories c ON p.category_id = c.id
-ORDER BY p.stock_quantity ASC;"""
-        return """SELECT p.name AS product_name, c.name AS category, p.unit_price, p.stock_quantity
-FROM products p
-JOIN categories c ON p.category_id = c.id
-ORDER BY p.name ASC;"""
-
-    # 6. Basic counts or summary
-    if "count" in q or "summary" in q or "overview" in q:
-        if "sales" in q or "orders" in q:
-            return "SELECT COUNT(*) AS total_orders, SUM(total_amount) AS total_revenue, AVG(total_amount) AS average_order_value FROM sales;"
-        if "customers" in q:
-            return "SELECT COUNT(*) AS total_customers FROM customers;"
-
-    # Default fallback: list sales transactions
-    return """SELECT s.id AS transaction_id, c.name AS customer_name, p.name AS product_name, s.sale_date, s.quantity, s.total_amount
-FROM sales s
-JOIN customers c ON s.customer_id = c.id
-JOIN products p ON s.product_id = p.id
-ORDER BY s.sale_date DESC
-LIMIT 50;"""
+    """The legacy service must never substitute sample-schema SQL."""
+    raise ValueError("Use the Express schema planner for offline requests, or configure a model key.")
 
 def generate_sql_llm(question: str, schema_text: str, api_key: str) -> str:
     """
@@ -169,7 +76,7 @@ Rules:
                 "content": prompt,
             }
         ],
-        model="llama3-70b-8192",
+        model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
         temperature=0.0,
     )
     
@@ -183,7 +90,7 @@ Rules:
 
 def generate_sql(question: str, database_id: int, api_key: str = None, metadata_db_path="ai-engine/metadata.db") -> str:
     """
-    Main entry point for generating SQL. Automatically switches between LLM and local rule-based fallback.
+    Legacy model-only SQL generation. Unsupported/offline requests fail explicitly.
     """
     schema_text = get_database_schema_text(database_id, metadata_db_path)
     
@@ -192,8 +99,7 @@ def generate_sql(question: str, database_id: int, api_key: str = None, metadata_
         try:
             return generate_sql_llm(question, schema_text, api_key)
         except Exception as e:
-            print(f"Groq API error, falling back to local NLP. Error: {e}")
-            return generate_sql_rule_based(question, schema_text)
+            raise ValueError("Language interpretation failed; no fallback SQL was executed.") from e
     else:
-        # Fallback to local regex-based generator
+        # No sample-schema SQL substitution is permitted
         return generate_sql_rule_based(question, schema_text)
