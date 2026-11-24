@@ -12,32 +12,29 @@ app.use(cors());
 app.use(express.json());
 
 // Open connection to metadata database
-const dbPath = path.join(__dirname, '../ai-engine/metadata.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('Failed to connect to metadata database:', err.message);
-  } else {
-    console.log('Connected to metadata database at:', dbPath);
-    // Enable WAL mode for concurrent read/write access and set busy timeout
-    db.serialize(() => {
-      db.run('PRAGMA journal_mode=WAL;');
-      db.run('PRAGMA busy_timeout=5000;'); // Wait up to 5s if database is locked
-      db.run('PRAGMA synchronous=NORMAL;'); // Balance safety and performance
-
-      // Backward-compatible migration: add layout_json to dashboards for the
-      // Power BI-grade free-form report canvas. Existing dashboards keep a NULL
-      // value and are reconstructed from dashboard_widgets on load. Idempotent —
-      // the "duplicate column name" error on subsequent boots is expected/ignored.
-      db.run('ALTER TABLE dashboards ADD COLUMN layout_json TEXT', (alterErr) => {
-        if (alterErr && !/duplicate column name/i.test(alterErr.message)) {
-          console.warn('[Migration] Could not add dashboards.layout_json:', alterErr.message);
-        } else if (!alterErr) {
-          console.log('[Migration] Added dashboards.layout_json column.');
-        }
-      });
-    });
+const dbPath = process.env.METADATA_DB_PATH || path.join(__dirname, '../ai-engine/metadata.db');
+const db = new sqlite3.Database(dbPath);
+const run = sql => new Promise((resolve, reject) => db.run(sql, err => err ? reject(err) : resolve()));
+async function migrate() {
+  await run('BEGIN IMMEDIATE');
+  try {
+    const columns = table => new Promise((resolve, reject) =>
+      db.all('PRAGMA table_info(' + table + ')', (err, rows) => err ? reject(err) : resolve(rows.map(r => r.name))));
+    if (!(await columns('connected_databases')).includes('user_id')) {
+      await run('ALTER TABLE connected_databases ADD COLUMN user_id INTEGER');
+      // Guest-era ownership cannot be attributed to a verified identity.
+      for (const table of ['dashboards', 'query_history']) {
+        await run('ALTER TABLE ' + table + ' ADD COLUMN legacy_user_id INTEGER');
+        await run('UPDATE ' + table + ' SET legacy_user_id = user_id, user_id = NULL');
+      }
+    }
+    if (!(await columns('dashboards')).includes('layout_json')) await run('ALTER TABLE dashboards ADD COLUMN layout_json TEXT');
+    await run('COMMIT');
+  } catch (err) {
+    await run('ROLLBACK');
+    throw err;
   }
-});
+}
 
 // Share db reference through app
 app.set('db', db);
@@ -50,10 +47,10 @@ const authenticateToken = (req, res, next) => {
   if (!token) return res.status(401).json({ error: 'Access token required' });
   
   const jwt = require('jsonwebtoken');
-  const secret = process.env.JWT_SECRET || 'voice2viz_jwt_secret_key_12345';
+  const secret = require('./secret');
   
   jwt.verify(token, secret, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Invalid or expired token' });
+    if (err) return res.status(401).json({ error: 'Invalid or expired token' });
     req.user = user;
     next();
   });
@@ -70,10 +67,10 @@ const dashboardsRouter = require('./routes/dashboards');
 const aiRouter = require('./routes/ai');
 
 app.use('/api/auth', authRouter);
-app.use('/api/databases', databasesRouter);
-app.use('/api/queries', queriesRouter);
-app.use('/api/dashboards', dashboardsRouter);
-app.use('/api/ai', aiRouter);
+app.use('/api/databases', authenticateToken, databasesRouter);
+app.use('/api/queries', authenticateToken, queriesRouter);
+app.use('/api/dashboards', authenticateToken, dashboardsRouter);
+app.use('/api/ai', authenticateToken, aiRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -81,6 +78,5 @@ app.get('/api/health', (req, res) => {
 });
 
 // Start Express Server
-app.listen(PORT, () => {
-  console.log(`Express API Server listening on port ${PORT}`);
-});
+migrate().then(() => app.listen(PORT, () => console.log('Listening on', PORT)))
+  .catch(err => { console.error('Metadata migration failed:', err.message); process.exit(1); });

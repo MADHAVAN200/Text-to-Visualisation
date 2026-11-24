@@ -3,11 +3,11 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'voice2viz_jwt_secret_key_12345';
+const JWT_SECRET = require('../secret');
 
 // User Registration
 router.post('/register', (req, res) => {
-  const { name, email, password, role } = req.body;
+  const { name, email, password } = req.body;
   const db = req.app.get('db');
 
   if (!name || !email || !password) {
@@ -16,7 +16,7 @@ router.post('/register', (req, res) => {
 
   const salt = bcrypt.genSaltSync(10);
   const hash = bcrypt.hashSync(password, salt);
-  const userRole = role || 'analyst';
+  const userRole = 'analyst';
   const createdAt = new Date().toISOString();
 
   db.run(
