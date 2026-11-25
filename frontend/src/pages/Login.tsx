@@ -28,6 +28,7 @@ export default function Login() {
       const response = await api.post(endpoint, payload);
       const { token, user } = response.data;
       
+      useStore.getState().logout();
       setToken(token);
       setUser(user);
       navigate('/');
@@ -50,7 +51,7 @@ export default function Login() {
             <Database className="w-6 h-6 text-white" />
           </div>
           <h1 className="text-2xl font-bold bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
-            Voice2Viz AI
+            Queryloom
           </h1>
           <p className="text-slate-400 text-sm mt-1">AI-Powered Natural Language Analytics Platform</p>
         </div>

@@ -6,9 +6,11 @@ import { Database, Plus, Trash2, RefreshCw, CheckCircle, HardDrive, Info } from 
 export default function Connections() {
   const { connectedDatabases, setConnectedDatabases, activeDatabase, setActiveDatabase } = useStore();
   
-  const [dbType, setDbType] = useState<'sqlite' | 'postgresql' | 'mysql'>('sqlite');
+  const [dbType, setDbType] = useState<'sqlite' | 'postgresql' | 'supabase' | 'mysql'>('sqlite');
   const [name, setName] = useState('');
   const [databaseName, setDatabaseName] = useState('ai-engine/sample_sales.db'); // default to sample database
+  const [schema,setSchema] = useState('public');
+  const [tls,setTls] = useState(true);
   const [host, setHost] = useState('localhost');
   const [port, setPort] = useState(5432);
   const [username, setUsername] = useState('');
@@ -29,7 +31,7 @@ export default function Connections() {
       if (res.data.warning) {
         setSuccess('Sandbox database connected, but schema sync was postponed. You can trigger sync manually.');
       } else {
-        setSuccess('Walkthrough Sandbox database successfully seeded and loaded with 10 tables and 5,700+ records!');
+        setSuccess('Retail sample connected and ready to query.');
       }
       
       // Fetch connections to update list
@@ -87,6 +89,8 @@ export default function Connections() {
       };
 
       if (dbType !== 'sqlite') {
+        payload.schema = schema;
+        payload.tls = tls;
         payload.host = host;
         payload.port = port;
         payload.username = username;
@@ -167,7 +171,7 @@ export default function Connections() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
             </span>
-            Try the text2Viz AI Sandbox
+            Try the Queryloom Sandbox
           </h2>
           <p className="text-slate-400 text-xs leading-relaxed">
             Don't have database credentials ready? Load our pre-populated enterprise sandbox database with <strong>10 tables</strong> and <strong>5,700+ diverse records</strong> (including Products, Suppliers, Sales, Payments, Inventory, Employees, and Customer Reviews) to instantly explore and test SQL parsing, chart building, and AI insights.
@@ -217,13 +221,14 @@ export default function Connections() {
             <div>
               <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Database Type</label>
               <div className="grid grid-cols-3 gap-2">
-                {(['sqlite', 'postgresql', 'mysql'] as const).map((type) => (
+                {(['sqlite', 'postgresql', 'supabase', 'mysql'] as const).map((type) => (
                   <button
                     key={type}
                     type="button"
                     onClick={() => {
                       setDbType(type);
-                      setPort(type === 'postgresql' ? 5432 : type === 'mysql' ? 3306 : 0);
+                      setPort(type === 'mysql' ? 3306 : 5432);
+                      setDatabaseName(type === 'supabase' ? 'postgres' : ''); setPassword(''); setHost(''); setTls(true);
                     }}
                     className={`py-2 px-3 text-xs font-semibold uppercase rounded-xl border transition-colors ${
                       dbType === type
@@ -267,6 +272,11 @@ export default function Connections() {
               </div>
             ) : (
               <>
+                <div className="space-y-2 text-sm">
+                  {dbType === 'supabase' && <p>Use the database host, port, user and password from your project’s Connect panel. A session pooler host works on IPv4 networks.</p>}
+                  {dbType !== 'mysql' && <label>PostgreSQL schema <input required value={schema} onChange={e=>setSchema(e.target.value)} className="bg-darkBg border rounded px-2" /></label>}
+                  <label className="block"><input type="checkbox" checked={tls} disabled={dbType === 'supabase'} onChange={e=>setTls(e.target.checked)} /> Use TLS with certificate verification</label>
+                </div>
                 <div className="grid grid-cols-3 gap-2">
                   <div className="col-span-2">
                     <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Host</label>
