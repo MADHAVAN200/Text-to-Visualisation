@@ -9,7 +9,6 @@
  *
  *   POST /api/ai/profile-schema     { database_id }              → per-column profiles
  *   POST /api/ai/suggest-charts     { database_id }              → ranked chart specs
- *   POST /api/ai/generate-dashboard { database_id, template }    → ready ReportState
  *   POST /api/ai/explain-data       { columns, rows }            → anomalies + narrative
  *
  * NL-to-visual reuses POST /api/queries/ask (no new endpoint here).
@@ -18,13 +17,12 @@
 
 const express = require('express');
 const router = express.Router();
+const owns = require('../ownership');
 
 const aiEngine = require('./ai-engine');
 const queriesRouter = require('./queries');
 
 // ── Design-surface constants (mirror frontend types.ts) ───────────────────────
-const DESIGN_WIDTH = 1280;
-const REPORT_VERSION = 1;
 const PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316', '#ec4899'];
 
 // ── Simple in-memory profile cache (5 min TTL) ────────────────────────────────
@@ -130,7 +128,7 @@ async function profileDatabase(dbId, db) {
 }
 
 // ── POST /profile-schema ──────────────────────────────────────────────────────
-router.post('/profile-schema', async (req, res) => {
+router.post('/profile-schema', owns('database', r => r.body.database_id), async (req, res) => {
   const { database_id } = req.body;
   const db = req.app.get('db');
   if (!database_id) return res.status(400).json({ error: 'database_id is required.' });
@@ -152,7 +150,7 @@ function q(id) {
   return `"${String(id).replace(/"/g, '')}"`;
 }
 
-function buildSuggestionsFromProfile(profile) {
+function buildSuggestionsFromProfile(profile,dbType) {
   const specs = [];
 
   profile.tables.forEach((t) => {
@@ -174,7 +172,7 @@ function buildSuggestionsFromProfile(profile) {
         title: `${metric.column} over time`,
         reason: `${t.table} has a time column (${temporal.column}) and a metric (${metric.column}) — a trend line reveals momentum.`,
         chartType: 'line',
-        sql: `SELECT strftime('%Y-%m', ${q(temporal.column)}) AS period, SUM(${q(metric.column)}) AS ${q('total_' + metric.column)}
+        sql: `SELECT ${require('../remote-source').period(dbType,q(temporal.column),true)} AS period, SUM(${q(metric.column)}) AS ${q('total_' + metric.column)}
 FROM ${q(t.table)}
 GROUP BY period ORDER BY period ASC`,
         fields: { xAxis: 'period', values: [{ field: 'total_' + metric.column, agg: 'SUM' }] },
@@ -240,7 +238,7 @@ FROM ${q(t.table)} LIMIT 200`,
 }
 
 // ── POST /suggest-charts ──────────────────────────────────────────────────────
-router.post('/suggest-charts', async (req, res) => {
+router.post('/suggest-charts', owns('database', r => r.body.database_id), async (req, res) => {
   const { database_id, api_key } = req.body;
   const db = req.app.get('db');
   if (!database_id) return res.status(400).json({ error: 'database_id is required.' });
@@ -251,7 +249,8 @@ router.post('/suggest-charts', async (req, res) => {
       return res.status(404).json({ error: 'No schema metadata found. Sync the database schema first.' });
     }
 
-    let suggestions = buildSuggestionsFromProfile(profile).slice(0, 12);
+    const connection = await queriesRouter.getDbConnectionParams(database_id,db);
+    let suggestions = buildSuggestionsFromProfile(profile,connection.db_type).slice(0, 12);
 
     // Optional LLM enrichment of the human-readable reasons (never fatal).
     const groq = aiEngine.getGroqClient(resolveKey(api_key));
@@ -262,7 +261,7 @@ router.post('/suggest-charts', async (req, res) => {
           .join('\n');
         const prompt = `You are a BI advisor. For each proposed chart, write ONE punchy sentence (max 18 words) explaining why it is worth pinning to a dashboard. Respond as a JSON array of strings in the same order, nothing else.\n\n${brief}`;
         const resp = await groq.chat.completions.create({
-          model: 'llama-3.1-8b-instant',
+          model: process.env.GROQ_FAST_MODEL || 'openai/gpt-oss-20b',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.4,
           max_tokens: 512,
@@ -285,168 +284,6 @@ router.post('/suggest-charts', async (req, res) => {
     res.json({ database_id: Number(database_id), suggestions, ai_powered: !!groq });
   } catch (err) {
     console.error('[AI/suggest-charts] failed:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Named dashboard templates ─────────────────────────────────────────────────
-
-const TEMPLATES = {
-  executive: {
-    name: 'Executive Overview',
-    description: 'High-level KPIs, revenue trend, and category performance.',
-    questions: [
-      'Overall total sales revenue',
-      'Total count of orders',
-      'Average order value',
-      'Show the monthly sales trend',
-      'What are the total sales by category?',
-      'Top 5 products by revenue',
-    ],
-  },
-  ecommerce: {
-    name: 'E-commerce Performance',
-    description: 'Revenue, product, customer, and returns analytics.',
-    questions: [
-      'Total revenue overall',
-      'Total number of orders',
-      'Show the monthly sales trend',
-      'Top 10 products by revenue',
-      'What are the total sales by category?',
-      'Customer count by city',
-      'Return reasons breakdown',
-    ],
-  },
-  activity: {
-    name: 'Operations & Activity',
-    description: 'Volume trends, status breakdowns, and recent activity.',
-    questions: [
-      'Total count of orders',
-      'Show the monthly orders trend',
-      'Support tickets by status',
-      'Customer count by segment',
-      'Recent transactions',
-    ],
-  },
-};
-
-// Lay widgets out on the 1280px design surface: KPI cards row, then 2-col charts.
-function layoutWidgets(widgets) {
-  const GAP = 24;
-  const PAD = 24;
-  const kpis = widgets.filter((w) => w.chartType === 'kpi');
-  const charts = widgets.filter((w) => w.chartType !== 'kpi');
-
-  const laid = [];
-  let z = 1;
-
-  // KPI row
-  const kpiW = 280;
-  const kpiH = 132;
-  kpis.forEach((w, i) => {
-    laid.push({ ...w, x: PAD + i * (kpiW + GAP), y: PAD, w: kpiW, h: kpiH, z: z++ });
-  });
-
-  // Charts: 2 columns
-  const colW = (DESIGN_WIDTH - PAD * 2 - GAP) / 2;
-  const chartH = 320;
-  const startY = kpis.length ? PAD + kpiH + GAP : PAD;
-  charts.forEach((w, i) => {
-    const col = i % 2;
-    const row = Math.floor(i / 2);
-    laid.push({
-      ...w,
-      x: PAD + col * (colW + GAP),
-      y: startY + row * (chartH + GAP),
-      w: colW,
-      h: chartH,
-      z: z++,
-    });
-  });
-
-  return laid;
-}
-
-// ── POST /generate-dashboard ──────────────────────────────────────────────────
-router.post('/generate-dashboard', async (req, res) => {
-  const { database_id, template, api_key } = req.body;
-  const db = req.app.get('db');
-
-  if (!database_id) return res.status(400).json({ error: 'database_id is required.' });
-  const tpl = TEMPLATES[template];
-  if (!tpl) {
-    return res.status(400).json({ error: `Unknown template "${template}". Use: ${Object.keys(TEMPLATES).join(', ')}` });
-  }
-
-  const resolvedApiKey = resolveKey(api_key);
-
-  try {
-    const rawWidgets = [];
-    let idx = 0;
-
-    for (const question of tpl.questions) {
-      try {
-        const { sql } = await aiEngine.generateSql(question, database_id, db, resolvedApiKey);
-        const { valid } = aiEngine.validateSql(sql);
-        if (!valid) continue;
-
-        const { rows, columns } = await queriesRouter.executeQuery(database_id, sql, db);
-        if (!rows || rows.length === 0) continue;
-
-        const chart = await aiEngine.recommendChart(question, columns, rows, resolvedApiKey);
-
-        rawWidgets.push({
-          id: `w-${Date.now().toString(36)}-${idx++}`,
-          type: 'chart',
-          chartType: chart.chart_type || 'bar',
-          title: question,
-          databaseId: Number(database_id),
-          sql,
-          question,
-          fields: {
-            xAxis: chart.x_axis || undefined,
-            values: (chart.y_axis || []).map((f) => ({ field: f, agg: 'SUM' })),
-          },
-          formatting: { palette: PALETTE, showLegend: true, showGrid: true },
-          emitsCrossFilter: chart.chart_type !== 'kpi',
-          x: 0,
-          y: 0,
-          w: 400,
-          h: 300,
-          z: 1,
-        });
-      } catch (pipeErr) {
-        console.warn(`[AI/generate-dashboard] skipped "${question}": ${pipeErr.message}`);
-      }
-    }
-
-    if (!rawWidgets.length) {
-      return res
-        .status(400)
-        .json({ error: 'Could not generate any widgets — the database may be empty or unreachable.' });
-    }
-
-    const widgets = layoutWidgets(rawWidgets);
-    const pageId = 'page-1';
-    const reportState = {
-      version: REPORT_VERSION,
-      themeId: 'midnight',
-      pages: [{ id: pageId, name: 'Page 1', widgets }],
-      activePageId: pageId,
-      canvasWidth: DESIGN_WIDTH,
-      globalFilters: [],
-    };
-
-    res.json({
-      template,
-      name: tpl.name,
-      description: tpl.description,
-      report_state: reportState,
-      widget_count: widgets.length,
-      ai_powered: !!aiEngine.getGroqClient(resolvedApiKey),
-    });
-  } catch (err) {
-    console.error('[AI/generate-dashboard] failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

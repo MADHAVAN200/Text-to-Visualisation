@@ -14,8 +14,8 @@
 const Groq = require('groq-sdk');
 
 // ── Model config ──────────────────────────────────────────────────────────────
-const PRIMARY_MODEL   = 'llama-3.3-70b-versatile';   // Best quality
-const FALLBACK_MODEL  = 'llama-3.1-8b-instant';       // Faster / cheaper
+const PRIMARY_MODEL   = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+const FALLBACK_MODEL  = process.env.GROQ_FAST_MODEL || 'openai/gpt-oss-20b';
 const MAX_TOKENS_SQL  = 512;
 const MAX_TOKENS_INS  = 1024;
 const MAX_TOKENS_CHART = 256;
@@ -86,10 +86,15 @@ async function generateSql(question, dbId, metaDb, apiKey) {
     console.warn('[AI Engine] Could not fetch schema:', e.message);
   }
 
+  const {db_type} = await require('./queries').getDbConnectionParams(dbId,metaDb);
+  const specs = await require('./schema-dashboard')(question,dbId,metaDb,apiKey,{},true);
+  if (specs?.length > 2) throw unsupported('Use Dashboard Builder to display all requested metrics together.');
+  if (specs) return {sql:specs.at(-1).sql, source:'schema', model:null};
+
   // Try LLM if we have a client and schema
   if (groq && schemaText) {
     try {
-      const prompt = buildSqlPrompt(question, schemaText);
+      const prompt = buildSqlPrompt(question, schemaText,db_type);
       const response = await groq.chat.completions.create({
         model: PRIMARY_MODEL,
         messages: [{ role: 'user', content: prompt }],
@@ -109,7 +114,7 @@ async function generateSql(question, dbId, metaDb, apiKey) {
       try {
         const response = await groq.chat.completions.create({
           model: FALLBACK_MODEL,
-          messages: [{ role: 'user', content: buildSqlPrompt(question, schemaText) }],
+          messages: [{ role: 'user', content: buildSqlPrompt(question, schemaText,db_type) }],
           temperature: 0.0,
           max_tokens: MAX_TOKENS_SQL,
         });
@@ -125,15 +130,12 @@ async function generateSql(question, dbId, metaDb, apiKey) {
     }
   }
 
-  // Rule-based fallback
-  console.log('[AI Engine] Using rule-based SQL generator');
-  const sql = generateSqlRuleBased(question);
-  return { sql, model: null, source: 'rule-based' };
+  throw unsupported('Cannot resolve this question with the available schema and model. Specify a supported metric and period.');
 }
 
-function buildSqlPrompt(question, schemaText) {
-  return `You are a senior data analyst and SQLite SQL expert.
-Convert the following natural language question into a clean, syntactically correct SQLite SQL query.
+function buildSqlPrompt(question, schemaText,db_type) {
+  return `You are a senior data analyst and ${db_type} SQL expert.
+Convert the following natural language question into a clean, syntactically correct ${db_type} SQL query.
 
 Database Schema:
 ${schemaText}
@@ -145,7 +147,7 @@ Rules:
 2. Only write SELECT or WITH queries (read-only).
 3. Do NOT add a semicolon at the end.
 4. Use only table names and column names from the schema above.
-5. Use SQLite syntax (strftime for dates, etc.).
+5. Use the ${db_type} dialect for dates, joins and aggregates.
 6. Always use table aliases and descriptive column aliases for clarity.
 7. Limit results to 100 rows unless the question asks for a specific count.
 
@@ -322,7 +324,7 @@ Use kpi for single key-value cards (e.g. total revenue, overall counts, summary 
   }
 
   // Post-processing override to guarantee single-row overall KPI metrics show as KPI cards
-  if (result && rows && rows.length === 1) {
+  if (result && rows && rows.length === 1 && numericCols.length === 1) {
     const qLower = question.toLowerCase();
     const isKpiQ = qLower.includes('total') || qLower.includes('sum') || qLower.includes('count') || qLower.includes('overall') || qLower.includes('kpi') || qLower.includes('card') || qLower.includes('average') || qLower.includes('avg');
     
@@ -344,26 +346,11 @@ Use kpi for single key-value cards (e.g. total revenue, overall counts, summary 
 function recommendChartHeuristic(question, columns, rows, numericCols, categoricalCols, colors) {
   const q = question.toLowerCase();
 
-  const isKpiQuestion = q.includes('total') || q.includes('sum') || q.includes('count') || q.includes('overall') || q.includes('kpi') || q.includes('card') || q.includes('average') || q.includes('avg');
-  
-  if (rows.length === 1 && numericCols.length >= 1) {
-    let selectedCol = numericCols[0];
-    if (isKpiQuestion) {
-      if (q.includes('revenue') || q.includes('sales') || q.includes('amount')) {
-        const match = numericCols.find(c => c.toLowerCase().includes('revenue') || c.toLowerCase().includes('sales') || c.toLowerCase().includes('amount') || c.toLowerCase().includes('total'));
-        if (match) selectedCol = match;
-      } else if (q.includes('order') || q.includes('count')) {
-        const match = numericCols.find(c => c.toLowerCase().includes('order') || c.toLowerCase().includes('count'));
-        if (match) selectedCol = match;
-      }
-    }
-    return { chart_type: 'kpi', x_axis: columns[0] || '', y_axis: [selectedCol], title: question, config: { colors } };
+  if (rows.length === 1 && numericCols.length === 1 && categoricalCols.length === 0) {
+    return { chart_type: 'kpi', x_axis: columns[0] || '', y_axis: numericCols, title: question, config: { colors } };
   }
-
-  if (isKpiQuestion) {
-    if (numericCols.length === 1 && rows.length <= 10) {
-      return { chart_type: 'kpi', x_axis: columns[0] || '', y_axis: numericCols, title: question, config: { colors } };
-    }
+  if (rows.length === 1 && numericCols.length > 1) {
+    return { chart_type: 'table', x_axis: columns[0] || '', y_axis: numericCols, title: question, config: { colors } };
   }
 
   if (categoricalCols.length >= 1 && numericCols.length >= 1) {
@@ -406,61 +393,8 @@ function validateSql(sql) {
 
 // ── Rule-Based SQL Generator (extended fallback) ──────────────────────────────
 
-function generateSqlRuleBased(question) {
-  const q = question.toLowerCase().trim();
-
-  if (q === '__dashboard_reload__') {
-    return 'SELECT * FROM sales ORDER BY sale_date DESC LIMIT 50';
-  }
-
-  if (q.includes('top') && q.includes('product') && (q.includes('revenue') || q.includes('sales') || q.includes('amount'))) {
-    const m = q.match(/top\s+(\d+)/);
-    const limit = m ? parseInt(m[1]) : 10;
-    return `SELECT p.name AS product_name, c.name AS category, SUM(s.total_amount) AS total_revenue, COUNT(s.id) AS orders
-FROM sales s JOIN products p ON s.product_id = p.id JOIN categories c ON p.category_id = c.id
-GROUP BY p.id, p.name, c.name ORDER BY total_revenue DESC LIMIT ${limit}`;
-  }
-  if ((q.includes('sales') || q.includes('revenue') || q.includes('amount')) && (q.includes('category') || q.includes('categories'))) {
-    return `SELECT c.name AS category_name, SUM(s.total_amount) AS total_sales, COUNT(s.id) AS order_count, AVG(s.total_amount) AS avg_order_value
-FROM sales s JOIN products p ON s.product_id = p.id JOIN categories c ON p.category_id = c.id
-GROUP BY c.id, c.name ORDER BY total_sales DESC`;
-  }
-  if ((q.includes('sales') || q.includes('revenue')) && (q.includes('month') || q.includes('monthly') || q.includes('trend') || q.includes('time'))) {
-    let yearClause = '';
-    if (q.includes('2025')) yearClause = "WHERE sale_date LIKE '2025%'";
-    else if (q.includes('2026')) yearClause = "WHERE sale_date LIKE '2026%'";
-    return `SELECT strftime('%Y-%m', sale_date) AS month, SUM(total_amount) AS revenue, COUNT(id) AS sales_count, AVG(total_amount) AS avg_sale
-FROM sales ${yearClause} GROUP BY month ORDER BY month ASC`;
-  }
-  if ((q.includes('customer') || q.includes('customers')) && q.includes('city')) return `SELECT city, COUNT(id) AS customer_count FROM customers GROUP BY city ORDER BY customer_count DESC`;
-  if ((q.includes('customer') || q.includes('customers')) && q.includes('country')) return `SELECT country, COUNT(id) AS customer_count FROM customers GROUP BY country ORDER BY customer_count DESC`;
-  if ((q.includes('customer') || q.includes('customers')) && q.includes('segment')) return `SELECT segment, COUNT(id) AS customer_count FROM customers GROUP BY segment ORDER BY customer_count DESC`;
-  if (q.includes('customer') || q.includes('customers')) return `SELECT name, email, city, country, segment, date(created_at) AS join_date FROM customers ORDER BY created_at DESC LIMIT 20`;
-  if ((q.includes('product') || q.includes('products')) && (q.includes('stock') || q.includes('inventory'))) {
-    return `SELECT p.name AS product_name, c.name AS category, p.stock_quantity, p.unit_price
-FROM products p JOIN categories c ON p.category_id = c.id ORDER BY p.stock_quantity ASC`;
-  }
-  if (q.includes('product') || q.includes('products')) return `SELECT p.name AS product_name, c.name AS category, p.unit_price, p.stock_quantity FROM products p JOIN categories c ON p.category_id = c.id ORDER BY p.name ASC`;
-  if (q.includes('employee') || q.includes('employees') || q.includes('staff')) {
-    if (q.includes('department') || q.includes('dept')) return `SELECT department, COUNT(id) AS employee_count, AVG(salary) AS avg_salary FROM employees GROUP BY department ORDER BY employee_count DESC`;
-    return `SELECT id, name, department, position, salary, hire_date FROM employees ORDER BY name ASC LIMIT 20`;
-  }
-  if (q.includes('supplier') || q.includes('suppliers')) return `SELECT id, name, country, contact_email FROM suppliers ORDER BY name ASC`;
-  if (q.includes('inventory') || q.includes('warehouse') || q.includes('stock level')) {
-    return `SELECT p.name AS product_name, i.quantity_in_stock, i.reorder_level, i.warehouse_location FROM inventory i JOIN products p ON i.product_id = p.id ORDER BY i.quantity_in_stock ASC`;
-  }
-  if (q.includes('campaign') || q.includes('marketing')) return `SELECT campaign_name, channel, budget, revenue_generated, start_date, end_date FROM marketing_campaigns ORDER BY revenue_generated DESC`;
-  if (q.includes('support') || q.includes('ticket') || q.includes('tickets')) return `SELECT status, priority, COUNT(id) AS count FROM support_tickets GROUP BY status, priority ORDER BY count DESC`;
-  if (q.includes('review') || q.includes('reviews') || q.includes('rating') || q.includes('ratings')) {
-    return `SELECT p.name AS product_name, AVG(r.rating) AS avg_rating, COUNT(r.id) AS review_count FROM reviews r JOIN products p ON r.product_id = p.id GROUP BY p.id, p.name ORDER BY avg_rating DESC`;
-  }
-  if (q.includes('return') || q.includes('returns') || q.includes('refund') || q.includes('refunds')) return `SELECT reason, COUNT(id) AS return_count, SUM(refund_amount) AS total_refunded FROM returns GROUP BY reason ORDER BY return_count DESC`;
-  if (q.includes('count') || q.includes('summary') || q.includes('overview') || q.includes('total')) {
-    if (q.includes('sales') || q.includes('orders')) return `SELECT COUNT(*) AS total_orders, SUM(total_amount) AS total_revenue, AVG(total_amount) AS average_order_value, MAX(total_amount) AS highest_sale FROM sales`;
-    if (q.includes('customers')) return `SELECT COUNT(*) AS total_customers, COUNT(DISTINCT city) AS cities_covered, COUNT(DISTINCT country) AS countries FROM customers`;
-  }
-  return `SELECT s.id AS transaction_id, c.name AS customer_name, p.name AS product_name, s.sale_date, s.quantity, s.total_amount
-FROM sales s JOIN customers c ON s.customer_id = c.id JOIN products p ON s.product_id = p.id ORDER BY s.sale_date DESC LIMIT 50`;
+function unsupported(message) {
+  return Object.assign(new Error(message), { status: 422 });
 }
 
 async function generateDashboardInsights(dashboardName, dashboardDesc, widgetsData, apiKey) {
@@ -545,7 +479,6 @@ module.exports = {
   recommendChart,
   validateSql,
   getSchemaText,
-  generateSqlRuleBased,
   getGroqClient,
   generateDashboardInsights,
 };

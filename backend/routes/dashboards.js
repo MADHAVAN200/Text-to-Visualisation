@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const owns = require('../ownership');
 const path = require('path');
 const queriesRouter = require('./queries');
 const aiEngine = require('./ai-engine');
@@ -7,7 +8,7 @@ const aiEngine = require('./ai-engine');
 // List all dashboards
 router.get('/', (req, res) => {
   const db = req.app.get('db');
-  db.all(`SELECT id, name, description, created_at FROM dashboards ORDER BY created_at DESC`, [], (err, rows) => {
+  db.all(`SELECT id, name, description, created_at FROM dashboards WHERE user_id = ? ORDER BY created_at DESC`, [req.user.id], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
@@ -21,8 +22,7 @@ router.post('/', (req, res) => {
   if (!name) return res.status(400).json({ error: 'Dashboard name is required.' });
 
   const createdAt = new Date().toISOString();
-  // Default user_id = 1 for ease of use
-  const userId = 1;
+  const userId = req.user.id;
 
   db.run(
     `INSERT INTO dashboards (user_id, name, description, created_at) VALUES (?, ?, ?, ?)`,
@@ -35,7 +35,7 @@ router.post('/', (req, res) => {
 });
 
 // Get detailed dashboard with all its widgets, visualizations, and their queries
-router.get('/:id', (req, res) => {
+router.get('/:id', owns('dashboard', r => r.params.id), (req, res) => {
   const dashboardId = req.params.id;
   const db = req.app.get('db');
 
@@ -90,7 +90,7 @@ router.get('/:id', (req, res) => {
 // for the new builder) and, best-effort, mirrors SQL-backed chart widgets into the
 // legacy dashboard_widgets table so older readers (Dashboard home, legacy GET) still
 // render. Non-chart widgets (text, slicer, narrative) live only in layout_json.
-router.put('/:id/report', (req, res) => {
+router.put('/:id/report', owns('dashboard', r => r.params.id), owns('visualization', r => (r.body.widgets || []).map(w => w.visualization_id)), (req, res) => {
   const dashboardId = req.params.id;
   const { layout_json, widgets } = req.body;
   const db = req.app.get('db');
@@ -141,7 +141,7 @@ router.put('/:id/report', (req, res) => {
 });
 
 // Delete a dashboard and its widgets
-router.delete('/:id', (req, res) => {
+router.delete('/:id', owns('dashboard', r => r.params.id), (req, res) => {
   const dashboardId = req.params.id;
   const db = req.app.get('db');
 
@@ -155,7 +155,7 @@ router.delete('/:id', (req, res) => {
 });
 
 // Add a widget (visualization) to a dashboard
-router.post('/:id/widgets', (req, res) => {
+router.post('/:id/widgets', owns('dashboard', r => r.params.id), owns('visualization', r => r.body.visualization_id), (req, res) => {
   const dashboardId = req.params.id;
   const { visualization_id, position_x, position_y, width, height } = req.body;
   const db = req.app.get('db');
@@ -191,7 +191,7 @@ router.post('/:id/widgets', (req, res) => {
 });
 
 // Rearrange and resize widgets (update coordinates for all widgets)
-router.put('/:id/widgets/layout', (req, res) => {
+router.put('/:id/widgets/layout', owns('dashboard', r => r.params.id), (req, res) => {
   const dashboardId = req.params.id;
   const { layout } = req.body; // Array: [{ widget_id: int, position_x: int, position_y: int, width: int, height: int }]
   const db = req.app.get('db');
@@ -230,7 +230,7 @@ router.put('/:id/widgets/layout', (req, res) => {
 });
 
 // Delete a widget from dashboard
-router.delete('/widgets/:id', (req, res) => {
+router.delete('/widgets/:id', owns('widget', r => r.params.id), (req, res) => {
   const widgetId = req.params.id;
   const db = req.app.get('db');
 
@@ -241,232 +241,17 @@ router.delete('/widgets/:id', (req, res) => {
 });
 
 // POST /recommend - AI dashboard recommendation and schema-based auto-generation
-router.post('/recommend', async (req, res) => {
-  const { database_id, api_key } = req.body;
-  const db = req.app.get('db');
-  const userId = 1; // Default guest user
-  const createdAt = new Date().toISOString();
-
-  if (!database_id) {
-    return res.status(400).json({ error: 'database_id is required for dashboard recommendation.' });
-  }
-
-  // Resolve API key
-  const resolvedApiKey = (api_key && api_key.trim() && !api_key.startsWith('YOUR_'))
-    ? api_key.trim()
-    : process.env.GROQ_API_KEY;
-
+router.post('/recommend', owns('database', r => r.body.database_id), async (req, res) => {
   try {
-    // 1. Get database details
-    const database = await new Promise((resolve, reject) => {
-      db.get(`SELECT name FROM connected_databases WHERE id = ?`, [database_id], (err, row) => {
-        if (err) return reject(err);
-        resolve(row);
-      });
-    });
-
-    if (!database) {
-      return res.status(404).json({ error: 'Database not found.' });
-    }
-
-    // 2. Fetch successful queries with visualizations
-    let successQueries = await new Promise((resolve, reject) => {
-      db.all(
-        `SELECT v.id as visualization_id, q.question, v.chart_type
-         FROM visualizations v
-         JOIN query_history q ON v.query_id = q.id
-         WHERE q.database_id = ? AND q.status = 'success'
-         ORDER BY q.created_at DESC`,
-        [database_id],
-        (err, rows) => {
-          if (err) return reject(err);
-          resolve(rows);
-        }
-      );
-    });
-
-    let autoGenerated = false;
-
-    // 3. If fewer than 3 visual queries exist, trigger schema auto-generation
-    if (successQueries.length < 3) {
-      const schemaText = await aiEngine.getSchemaText(database_id, db);
-      let recommendedQuestions = [];
-
-      // Try LLM question recommendation if schema exists and we have Groq initialized
-      const groq = aiEngine.getGroqClient(resolvedApiKey);
-      if (groq && schemaText) {
-        try {
-          const prompt = `You are a business intelligence assistant analyzing a database schema.
-Here is the Database Schema:
-${schemaText}
-
-Please recommend exactly 5 highly relevant, analytical business questions that a user would want to visualize on a dashboard: 2 overall metrics/KPI cards (e.g. overall total sales or total counts) and 3 chart comparison/trend questions (e.g. total sales by category, monthly order trends, top products).
-Provide the questions in a clean list, one per line. Do not add numbers, introductions, bullet characters (* or -), or descriptions. Just the raw question text.
-Ensure they are readable questions.
-
-Example output:
-Total revenue overall
-Total count of orders
-Total revenue by product category
-Monthly orders trend over time
-Top 10 highest-value customers`;
-
-          const response = await groq.chat.completions.create({
-            model: 'llama-3.1-8b-instant',
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.5,
-            max_tokens: 512,
-          });
-
-          const rawQuestions = response.choices[0]?.message?.content?.trim() || '';
-          const parsedQuestions = rawQuestions
-            .split('\n')
-            .map(q => q.trim().replace(/^[-*\d.\s]+/, ''))
-            .filter(q => q.length > 5);
-
-          if (parsedQuestions.length >= 2) {
-            recommendedQuestions = parsedQuestions.slice(0, 5);
-          }
-        } catch (err) {
-          console.warn('[AI Recommendation] Failed to generate custom questions, using templates:', err.message);
-        }
-      }
-
-      // Templates fallback for default sandbox sales DB if LLM fails or is offline
-      if (recommendedQuestions.length === 0) {
-        recommendedQuestions = [
-          "Overall total sales revenue",
-          "Total count of orders",
-          "What are the total sales by category?",
-          "Show the monthly sales trend.",
-          "Top 5 products by revenue."
-        ];
-      }
-
-      const generatedVisualizations = [];
-      for (const question of recommendedQuestions) {
-        try {
-          const { sql, source } = await aiEngine.generateSql(question, database_id, db, resolvedApiKey);
-          const { valid, error: valErr } = aiEngine.validateSql(sql);
-          if (!valid) continue;
-
-          const { rows, columns, executionTime } = await queriesRouter.executeQuery(database_id, sql, db);
-          if (!rows || rows.length === 0) continue;
-
-          const chart = await aiEngine.recommendChart(question, columns, rows, resolvedApiKey);
-          const insights = await aiEngine.generateInsights(question, columns, rows, resolvedApiKey);
-
-          const { vizId } = await queriesRouter.saveQueryAndVisualization(db, {
-            userId,
-            dbId: database_id,
-            question,
-            sql,
-            executionTime,
-            chart,
-            insights,
-            createdAt
-          });
-
-          if (vizId) {
-            generatedVisualizations.push({
-              visualization_id: vizId,
-              question,
-              chart_type: chart.chart_type
-            });
-          }
-        } catch (pipeErr) {
-          console.warn(`[AI Recommendation] Pipeline failed for: "${question}" - ${pipeErr.message}`);
-        }
-      }
-
-      successQueries = [...generatedVisualizations, ...successQueries];
-      autoGenerated = true;
-    }
-
-    if (successQueries.length === 0) {
-      return res.status(400).json({ error: 'Could not auto-generate any charts because database tables might be empty.' });
-    }
-
-    // 4. Create the recommended dashboard
-    const dashboardName = autoGenerated 
-      ? `AI Auto-Generated Dashboard`
-      : `AI Recommended Dashboard (${database.name})`;
-    const dashboardDesc = autoGenerated
-      ? `Automatically generated dashboard compiling insights from tables in ${database.name}.`
-      : `AI compiled dashboard recommended from your recent query history on ${database.name}.`;
-
-    const dashboardId = await new Promise((resolve, reject) => {
-      db.run(
-        `INSERT INTO dashboards (user_id, name, description, created_at) VALUES (?, ?, ?, ?)`,
-        [userId, dashboardName, dashboardDesc, createdAt],
-        function (err) {
-          if (err) return reject(err);
-          resolve(this.lastID);
-        }
-      );
-    });
-
-    // 5. Add unique widgets (limit to 6 widgets)
-    const uniqueVizs = [];
-    const questionsSeen = new Set();
-    
-    for (const q of successQueries) {
-      if (!questionsSeen.has(q.question) && uniqueVizs.length < 6) {
-        questionsSeen.add(q.question);
-        uniqueVizs.push(q);
-      }
-    }
-
-    const insertWidget = (vizId, x, y, w, h) => {
-      return new Promise((resolve, reject) => {
-        db.run(
-          `INSERT INTO dashboard_widgets (dashboard_id, visualization_id, position_x, position_y, width, height)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [dashboardId, vizId, x, y, w, h],
-          (err) => {
-            if (err) return reject(err);
-            resolve();
-          }
-        );
-      });
-    };
-
-    let currentX = 0;
-    let currentY = 0;
-    for (let i = 0; i < uniqueVizs.length; i++) {
-      const viz = uniqueVizs[i];
-      let w = 6;
-      let h = 4;
-      if (viz.chart_type === 'kpi') {
-        w = 3;
-        h = 3;
-      }
-      
-      if (currentX + w > 12) {
-        currentX = 0;
-        currentY += 4;
-      }
-      
-      await insertWidget(viz.visualization_id, currentX, currentY, w, h);
-      currentX += w;
-    }
-
-    res.json({
-      success: true,
-      dashboard_id: dashboardId,
-      name: dashboardName,
-      widget_count: uniqueVizs.length,
-      auto_generated: autoGenerated
-    });
-
+    await createRequestedDashboard(req, res);
   } catch (err) {
-    console.error('[AI Recommendation] Auto-dashboard generation failed:', err);
-    res.status(500).json({ error: err.message });
+    if (!err.clarification) console.error('[AI Recommendation] Auto-dashboard generation failed:', err);
+    res.status(err.status || 500).json({ error: err.message, clarification: err.clarification });
   }
 });
 
 // PUT /widgets/:id - Update widget visual configurations or title
-router.put('/widgets/:id', (req, res) => {
+router.put('/widgets/:id', owns('widget', r => r.params.id), (req, res) => {
   const widgetId = req.params.id;
   const { chart_type, chart_config, question } = req.body;
   const db = req.app.get('db');
@@ -530,7 +315,7 @@ router.put('/widgets/:id', (req, res) => {
 });
 
 // POST /:id/widgets/import-query - Import query history as a widget
-router.post('/:id/widgets/import-query', (req, res) => {
+router.post('/:id/widgets/import-query', owns('dashboard', r => r.params.id), owns('query', r => r.body.query_id), (req, res) => {
   const dashboardId = req.params.id;
   const { query_id, chart_type } = req.body;
   const db = req.app.get('db');
@@ -603,7 +388,7 @@ router.post('/:id/widgets/import-query', (req, res) => {
 });
 
 // GET /:id/ai-insights - Generate AI insights for the dashboard
-router.get('/:id/ai-insights', async (req, res) => {
+router.get('/:id/ai-insights', owns('dashboard', r => r.params.id), async (req, res) => {
   const dashboardId = req.params.id;
   const db = req.app.get('db');
   const api_key = req.query.api_key;
@@ -685,4 +470,27 @@ router.get('/:id/ai-insights', async (req, res) => {
   }
 });
 
+// Publish the whole report in a single insert after all measures have executed.
+async function createRequestedDashboard(req, res) {
+  const { objective = '', database_id } = req.body;
+  if (typeof objective !== 'string') return res.status(400).json({error: 'Expected a dashboard request.'});
+  const goal = objective.trim().replace(/[.!?]$/, '');
+  const db = req.app.get('db');
+  const specs = await require('./schema-dashboard')(objective, database_id, db, req.body.api_key, req.body.choices);
+  const widgets = [];
+  for (const {type, value, question, sql, x, allowNull} of specs) {
+    const {rows} = await queriesRouter.executeQuery(database_id, sql, db);
+    if (!rows.length || (!allowNull && rows.every(row => row[value] == null))) return res.status(422).json({error:'No metric values in the requested period.'});
+    const detail = type !== 'kpi';
+    widgets.push({id:type + widgets.length, type:'chart', chartType:type, title:question, question, sql, databaseId:Number(database_id),
+      fields:{xAxis:x, values:[{field:value, agg:'NONE'}]}, formatting:{},
+      x:24, y:widgets.length ? widgets.at(-1).y + widgets.at(-1).h + 16 : 20, w:detail ? 760 : 320, h:detail ? 350 : 130, z:widgets.length + 1});
+  }
+  const report = {version: 1, themeId:'midnight', pages:[{id:'overview',name:'Overview',widgets}],activePageId:'overview',canvasWidth:1200,globalFilters:[]};
+  const id = await new Promise((resolve,reject) => db.run(
+    'INSERT INTO dashboards(user_id,name,description,created_at,layout_json) VALUES(?,?,?,?,?)',
+    [req.user.id, goal || 'Database overview', objective, new Date().toISOString(), JSON.stringify(report)],
+    function(err) { err ? reject(err) : resolve(this.lastID); }));
+  res.status(201).json({dashboard_id:id, widget_count:widgets.length});
+}
 module.exports = router;
