@@ -29,10 +29,6 @@ function cloneReport(r: ReportState): ReportState {
   return structuredClone(r);
 }
 
-function lsKey(id: number | null): string {
-  return `v2v_report_${id ?? 'draft'}`;
-}
-
 // ── Module-level debounced persistence ───────────────────────────────────────────
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -46,11 +42,6 @@ function schedulePersist(get: () => BuilderState) {
 async function persist(state: BuilderState) {
   const { dashboardId, reportState } = state;
   const json = JSON.stringify(reportState);
-  try {
-    localStorage.setItem(lsKey(dashboardId), json);
-  } catch {
-    /* localStorage may be full/unavailable — non-fatal */
-  }
   if (dashboardId == null) {
     state._set({ dirty: false, saving: 'saved' });
     return;

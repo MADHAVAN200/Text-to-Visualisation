@@ -7,8 +7,6 @@
  *                     sql + chart spec as a CanvasWidget.
  *   - Suggestions   : POST /ai/suggest-charts → ranked chart chips; one click
  *                     adds that chart to the canvas.
- *   - Templates     : POST /ai/generate-dashboard → a ready ReportState loaded
- *                     onto the canvas (executive · ecommerce · activity).
  *   - Smart Narrative: POST /ai/explain-data on the selected widget's rows →
  *                     anomaly cards + a narrative that can be dropped in as a
  *                     narrative widget.
@@ -19,8 +17,8 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Sparkles, X, Send, Wand2, Lightbulb, AlertTriangle, LayoutTemplate,
-  Loader2, Database, Plus, TrendingUp, FileText, RefreshCw, Zap, Check,
+  Sparkles, X, Send, Wand2, Lightbulb, AlertTriangle,
+  Loader2, Database, Plus,  FileText, RefreshCw, Zap, Check,
 } from 'lucide-react';
 import api from '../../api';
 import { useStore } from '../../store/useStore';
@@ -28,7 +26,7 @@ import { useBuilderStore } from './builderStore';
 import { executeWidgetSql, parseMarkdownToReact } from './chartHelpers';
 import { getActivePage } from './types';
 import { genId, nextSlot, defaultSize } from './widgetFactory';
-import type { ChartType, AggregationType, CanvasWidget, ReportState } from './types';
+import type { ChartType, AggregationType, CanvasWidget } from './types';
 
 interface AiSuggestionsDrawerProps {
   open: boolean;
@@ -53,12 +51,6 @@ interface Anomaly {
 const VALID_CHART_TYPES: ChartType[] = [
   'bar', 'stackedBar', 'line', 'area', 'pie', 'donut', 'scatter', 'combo', 'kpi', 'table',
   'gauge', 'waterfall', 'heatmap', 'treemap', 'sankey', 'funnel',
-];
-
-const TEMPLATES: { key: string; name: string; description: string; icon: React.ReactNode }[] = [
-  { key: 'executive', name: 'Executive Overview', description: 'Headline KPIs, revenue trend, category mix.', icon: <TrendingUp className="w-4 h-4" /> },
-  { key: 'ecommerce', name: 'E-commerce Performance', description: 'Revenue, products, customers, returns.', icon: <LayoutTemplate className="w-4 h-4" /> },
-  { key: 'activity', name: 'Operations & Activity', description: 'Volume trends, status, recent activity.', icon: <Zap className="w-4 h-4" /> },
 ];
 
 function coerceChartType(t?: string): ChartType {
@@ -88,11 +80,6 @@ export default function AiSuggestionsDrawer({ open, onClose }: AiSuggestionsDraw
   const [suggestError, setSuggestError] = useState<string | null>(null);
   const [suggestAiPowered, setSuggestAiPowered] = useState(false);
   const [addedTitles, setAddedTitles] = useState<Set<string>>(new Set());
-
-  // Templates
-  const [templateBusy, setTemplateBusy] = useState<string | null>(null);
-  const [templateError, setTemplateError] = useState<string | null>(null);
-  const [confirmTemplate, setConfirmTemplate] = useState<string | null>(null);
 
   // Smart Narrative
   const [explaining, setExplaining] = useState(false);
@@ -218,32 +205,6 @@ export default function AiSuggestionsDrawer({ open, onClose }: AiSuggestionsDraw
     }
   };
 
-  // ── Templates (full-canvas generation) ────────────────────────────────────────
-  const applyTemplate = async (key: string) => {
-    if (dbId == null) return;
-    const hasWidgets = getActivePage(useBuilderStore.getState().reportState).widgets.length > 0;
-    if (hasWidgets && confirmTemplate !== key) {
-      setConfirmTemplate(key);
-      return;
-    }
-    setConfirmTemplate(null);
-    setTemplateBusy(key);
-    setTemplateError(null);
-    try {
-      const { data } = await api.post('/ai/generate-dashboard', { database_id: dbId, template: key, api_key: apiKey });
-      const report = data.report_state as ReportState | undefined;
-      if (!report || !report.pages) throw new Error('The template returned no report.');
-      const store = useBuilderStore.getState();
-      store.loadReport(store.dashboardId, report);
-      await store.saveNow();
-      onClose();
-    } catch (err: any) {
-      setTemplateError(err?.response?.data?.error || err?.message || 'Template generation failed.');
-    } finally {
-      setTemplateBusy(null);
-    }
-  };
-
   // ── Smart Narrative / anomalies ───────────────────────────────────────────────
   const explainSelected = async () => {
     if (!selectedWidget || selectedWidget.databaseId == null || !selectedWidget.sql) return;
@@ -311,7 +272,7 @@ export default function AiSuggestionsDrawer({ open, onClose }: AiSuggestionsDraw
         {!hasDb ? (
           <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 px-8 text-slate-500">
             <Database className="w-8 h-8" />
-            <p className="text-xs leading-relaxed">Connect a database from the Connections page to unlock AI suggestions, templates, and narratives.</p>
+            <p className="text-xs leading-relaxed">Connect a database from the Connections page to unlock AI suggestions and narratives.</p>
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
@@ -342,7 +303,7 @@ export default function AiSuggestionsDrawer({ open, onClose }: AiSuggestionsDraw
                     }
                   }}
                   rows={2}
-                  placeholder="e.g. Monthly revenue by category"
+                  placeholder="Ask about a measure or field in your database"
                   className="flex-1 bg-darkBg border border-darkBorder rounded-lg px-2.5 py-2 text-[11px] text-slate-200 resize-none focus:outline-none focus:border-blue-500 leading-snug"
                 />
                 <button
@@ -359,41 +320,6 @@ export default function AiSuggestionsDrawer({ open, onClose }: AiSuggestionsDraw
                 </p>
               )}
               {askError && <p className="text-[10px] text-red-400 mt-1.5">{askError}</p>}
-            </Section>
-
-            {/* Templates */}
-            <Section icon={<LayoutTemplate className="w-3.5 h-3.5" />} title="One-click dashboards">
-              <div className="space-y-2">
-                {TEMPLATES.map((t) => {
-                  const busy = templateBusy === t.key;
-                  const confirming = confirmTemplate === t.key;
-                  return (
-                    <div key={t.key} className="rounded-lg border border-darkBorder bg-darkBg overflow-hidden">
-                      <button
-                        onClick={() => void applyTemplate(t.key)}
-                        disabled={!!templateBusy}
-                        className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-darkSidebar disabled:opacity-50 transition-colors"
-                      >
-                        <span className="text-blue-400 shrink-0">{busy ? <Loader2 className="w-4 h-4 animate-spin" /> : t.icon}</span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-[12px] font-semibold text-slate-200 truncate">{t.name}</span>
-                          <span className="block text-[10px] text-slate-500 truncate">{t.description}</span>
-                        </span>
-                      </button>
-                      {confirming && (
-                        <div className="px-3 py-2 bg-amber-500/10 border-t border-amber-500/20 flex items-center justify-between gap-2">
-                          <span className="text-[10px] text-amber-300">Replace the current canvas?</span>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <button onClick={() => void applyTemplate(t.key)} className="px-2 py-1 rounded-md bg-amber-500 text-black text-[10px] font-semibold hover:bg-amber-400">Replace</button>
-                            <button onClick={() => setConfirmTemplate(null)} className="px-2 py-1 rounded-md border border-darkBorder text-slate-400 text-[10px] hover:text-slate-200">Cancel</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              {templateError && <p className="text-[10px] text-red-400 mt-1.5">{templateError}</p>}
             </Section>
 
             {/* Suggestions */}

@@ -201,7 +201,7 @@ export default function QueryWorkspace() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `text2viz_export_${Date.now()}.csv`);
+    link.setAttribute("download", `queryloom_export_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -325,7 +325,7 @@ export default function QueryWorkspace() {
             <input
               type="text"
               className="w-full bg-darkBg border border-darkBorder focus:border-blue-500 rounded-xl py-3 pl-4 pr-12 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/10 text-sm"
-              placeholder="e.g. Show monthly revenue for 2025 as a bar chart"
+              placeholder="Ask about a table or metric in your database"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
             />

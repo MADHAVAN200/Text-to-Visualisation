@@ -24,6 +24,7 @@ export default function DashboardBuilder() {
   const [newDashName, setNewDashName] = useState('');
   const [newDashDesc, setNewDashDesc] = useState('');
 
+  const [objective, setObjective] = useState('');
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -43,7 +44,11 @@ export default function DashboardBuilder() {
     fetchDashboards();
   }, []);
 
-  const handleRecommendDashboard = async () => {
+  const [clarification, setClarification] = useState<{key:string; options:string[]} | null>(null);
+  const [choices,setChoices] = useState<Record<string,string>>({});
+  const handleRecommendDashboard = async (answers:Record<string,string> = {}) => {
+    setChoices(answers);
+    setClarification(null);
     if (!activeDatabase) return;
     setGenerating(true);
     setError('');
@@ -52,6 +57,8 @@ export default function DashboardBuilder() {
       const res = await api.post('/dashboards/recommend', {
         database_id: activeDatabase.id,
         api_key: groqApiKey,
+        objective: objective.trim(),
+        choices: answers,
       });
       if (res.data && res.data.dashboard_id) {
         setSuccess('AI recommended dashboard generated successfully!');
@@ -59,6 +66,7 @@ export default function DashboardBuilder() {
         setActiveDashboardId(res.data.dashboard_id);
       }
     } catch (err: any) {
+      setClarification(err.response?.data?.clarification || null);
       setError(err.response?.data?.error || 'Failed to auto-generate recommended dashboard.');
     } finally {
       setGenerating(false);
@@ -110,41 +118,35 @@ export default function DashboardBuilder() {
   return (
     <div className="space-y-6 w-full py-4">
 
-      {/* Portal top actions bar */}
-      <div className="flex flex-col sm:flex-row justify-end items-start sm:items-center gap-4">
-
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex-1 sm:flex-initial bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-2.5 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95 hover:shadow-blue-600/15"
-          >
-            <Plus className="w-4 h-4" />
-            Create Dashboard
-          </button>
-
-          <button
-            onClick={handleRecommendDashboard}
-            disabled={generating || !activeDatabase}
-            className={`flex-1 sm:flex-initial py-2.5 px-4 rounded-xl text-xs font-bold text-white transition-all shadow-md active:scale-95 flex items-center justify-center gap-1.5 border ${
-              !activeDatabase
-                ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'
-                : generating
-                  ? 'bg-blue-600/50 cursor-wait'
-                  : 'bg-blue-600/10 border-blue-500/20 text-blue-400 hover:bg-blue-600 hover:text-white'
-            }`}
-          >
+      <section className="request-panel">
+        <h2>What would you like to understand?</h2>
+        <p>Ask in your own words. We use your connected schema to build the charts and check the query results.</p>
+        <div className="request-controls">
+          <textarea aria-label="Dashboard request" value={objective}
+            onChange={e => { setObjective(e.target.value); setClarification(null); setChoices({}); setError(''); }}
+            placeholder="Compare performance across countries, find the top performers, or explore what changed between two years..." />
+          <button onClick={() => handleRecommendDashboard()} disabled={generating || !activeDatabase}
+            className="bg-blue-600 hover:bg-blue-500 text-white rounded-lg px-5 py-3 text-xs font-semibold flex items-center gap-2">
             {generating && <RefreshCw className="w-4 h-4 animate-spin" />}
-            AI Quick Dashboard
+            {generating ? 'Building your dashboard...' : 'Generate dashboard'}
           </button>
         </div>
+        {!activeDatabase && <p role="status">Connect and select a database in Data to get started.</p>}
+      </section>
+      <div className="flex items-center justify-between"><h3 className="font-semibold text-sm">Saved dashboards</h3>
+        <button onClick={() => setShowCreateModal(true)} className="text-xs text-slate-400 flex items-center gap-1"><Plus size={14}/>Start from a blank canvas</button>
       </div>
 
       {error && (
-        <div className="p-4 bg-red-950/40 border border-red-500/30 text-red-200 text-xs rounded-xl">
+        <div role="alert" className="p-4 bg-red-950/40 border border-red-500/30 text-red-200 text-xs rounded-xl">
           {error}
         </div>
       )}
 
+      {clarification && <div className="flex flex-wrap gap-2">{clarification.options.map(option =>
+        <button key={option} className="bg-darkSidebar border border-darkBorder rounded px-3 py-2 text-sm"
+          onClick={() => handleRecommendDashboard({...choices,[clarification.key]:option})}>{option}</button>
+      )}</div>}
       {success && (
         <div className="p-4 bg-emerald-950/40 border border-emerald-500/30 text-emerald-200 text-xs rounded-xl">
           {success}
@@ -157,7 +159,7 @@ export default function DashboardBuilder() {
           <Grid className="w-12 h-12 text-slate-700 mx-auto" />
           <div>
             <h4 className="font-bold text-slate-400 text-sm">No dashboards created yet</h4>
-            <p className="text-slate-500 text-xs mt-1">Click the "Create Dashboard" button to start designing your analytics workspace.</p>
+            <p className="text-slate-500 text-xs mt-1">Ask a question above to create your first dashboard.</p>
           </div>
         </div>
       ) : (
