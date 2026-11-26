@@ -60,28 +60,18 @@ function compact(num: number): string {
   return num % 1 === 0 ? num.toString() : num.toFixed(2);
 }
 
-export function formatKpiValue(value: any, columnName: string = '', format?: NumberFormat): string {
+export function formatKpiValue(value: any, _columnName: string = '', format?: NumberFormat): string {
   if (value === null || value === undefined) return '-';
   const num = Number(value);
   if (isNaN(num)) return String(value);
 
-  const colLower = columnName.toLowerCase();
-  const inferredCurrency =
-    colLower.includes('sales') || colLower.includes('revenue') || colLower.includes('amount') ||
-    colLower.includes('price') || colLower.includes('cost') || colLower.includes('refund');
-  const inferredPercent =
-    colLower.includes('rate') || colLower.includes('percent') || colLower.includes('share') || colLower.includes('pct');
-
-  // Explicit formatting overrides column-name inference.
+  // Units are explicit: field names cannot establish currency or percentage units.
   if (format === 'plain') return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
   if (format === 'currency') return '$' + compact(num);
   if (format === 'percent') return compact(num) + '%';
   if (format === 'compact') return compact(num);
 
-  const formatted = compact(num);
-  if (inferredCurrency) return '$' + formatted;
-  if (inferredPercent) return formatted + '%';
-  return formatted;
+  return compact(num);
 }
 
 // ── Markdown → React (AI narratives) ─────────────────────────────────────────────

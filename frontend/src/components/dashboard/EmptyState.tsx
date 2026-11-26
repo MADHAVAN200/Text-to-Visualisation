@@ -2,7 +2,7 @@
  * EmptyState.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * AI Quick-Start shown centered over an empty canvas. Offers three fast paths:
- * ask the AI copilot, generate a full dashboard from a template, or drop in a
+ * ask the AI copilot, request a dashboard from the connected schema, or drop in a
  * first chart to configure by hand. Non-blocking: the container ignores pointer
  * events so the surrounding canvas stays interactive; only the cards are live.
  * ─────────────────────────────────────────────────────────────────────────────
@@ -57,8 +57,8 @@ export default function EmptyState({ onOpenAi }: EmptyStateProps) {
           />
           <QuickCard
             icon={<LayoutTemplate className="w-5 h-5" />}
-            title="Use a template"
-            desc="Generate a full dashboard in one click."
+            title="Describe a dashboard"
+            desc="Build from your connected schema."
             onClick={onOpenAi}
           />
           <QuickCard

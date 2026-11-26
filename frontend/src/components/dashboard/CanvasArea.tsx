@@ -64,7 +64,9 @@ export default function CanvasArea({ themePalette }: CanvasAreaProps) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
 
-  const scale = containerWidth > 0 ? containerWidth / canvasWidth : 1;
+  // Preserve readable chart labels and KPI values on narrow editor viewports.
+  // The scroll container handles overflow instead of crushing card contents.
+  const scale = containerWidth > 0 ? Math.max(1, containerWidth / canvasWidth) : 1;
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
   const snapRef = useRef(snapEnabled);
@@ -101,8 +103,9 @@ export default function CanvasArea({ themePalette }: CanvasAreaProps) {
     const el = scrollRef.current;
     if (!el) return { x: 0, y: 0 };
     const rect = el.getBoundingClientRect();
-    const localX = clientX - rect.left + el.scrollLeft;
-    const localY = clientY - rect.top + el.scrollTop;
+    const zoom = el.offsetWidth ? rect.width / el.offsetWidth : 1;
+    const localX = (clientX - rect.left) / zoom + el.scrollLeft;
+    const localY = (clientY - rect.top) / zoom + el.scrollTop;
     const s = scaleRef.current || 1;
     return { x: localX / s, y: localY / s };
   }, []);
@@ -160,7 +163,9 @@ export default function CanvasArea({ themePalette }: CanvasAreaProps) {
     const s = sessionRef.current;
     if (!s) return;
     const store = useBuilderStore.getState();
-    const sc = scaleRef.current || 1;
+    const el = scrollRef.current;
+    const zoom = el?.offsetWidth ? el.getBoundingClientRect().width / el.offsetWidth : 1;
+    const sc = (scaleRef.current || 1) * zoom;
     const { x: cx, y: cy } = lastPointer.current;
 
     if (s.kind === 'drag') {

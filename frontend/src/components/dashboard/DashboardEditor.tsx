@@ -149,6 +149,7 @@ export default function DashboardEditor({ dashboardId, onBack }: DashboardEditor
   const loadReport = useBuilderStore((s) => s.loadReport);
   const themeId = useBuilderStore((s) => s.reportState.themeId);
   const widgetCount = useBuilderStore((s) => getActivePage(s.reportState).widgets.length);
+  const hasSelection = useBuilderStore((s) => s.selectedWidgetIds.length > 0);
 
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
@@ -232,18 +233,18 @@ export default function DashboardEditor({ dashboardId, onBack }: DashboardEditor
 
       {/* Body: Fields ‖ Canvas ‖ Formatting */}
       <div className="flex-1 flex min-h-0">
-        <aside className="w-[280px] shrink-0 border-r border-darkBorder bg-darkSidebar overflow-hidden">
+        {hasSelection && <aside className="w-[280px] shrink-0 border-r border-darkBorder bg-darkSidebar overflow-hidden">
           <FieldsPane />
-        </aside>
+        </aside>}
 
         <main className="flex-1 relative min-w-0 bg-darkBg">
           <CanvasArea themePalette={palette} />
           {widgetCount === 0 && <EmptyState onOpenAi={() => setAiOpen(true)} />}
         </main>
 
-        <aside className="w-[280px] shrink-0 border-l border-darkBorder bg-darkSidebar overflow-hidden">
+        {hasSelection && <aside className="w-[280px] shrink-0 border-l border-darkBorder bg-darkSidebar overflow-hidden">
           <FormattingPane />
-        </aside>
+        </aside>}
       </div>
 
       {/* Proactive AI Copilot */}
