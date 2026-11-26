@@ -102,11 +102,9 @@ export default function RechartsView({
   const resolvedX = xKey || cols[0];
   const resolvedY = yKeys && yKeys.length > 0 ? yKeys : [cols.find((k) => typeof data[0][k] === 'number') || cols[1]].filter(Boolean);
 
-  // Single-row core charts read better as a KPI card (mirrors legacy behavior).
-  let type: ChartType = chartType;
-  if (data.length === 1 && (type === 'bar' || type === 'stackedBar' || type === 'line' || type === 'area' || type === 'pie' || type === 'donut' || type === 'scatter' || type === 'combo')) {
-    type = 'kpi';
-  }
+  // Keep the requested visual even for one category; converting to a KPI loses
+  // the grouping label (for example, the currency a total belongs to).
+  const type: ChartType = chartType;
 
   const emitX = (index: number) => {
     if (onElementClick && index != null && data[index]) onElementClick(data[index][resolvedX]);
@@ -118,11 +116,11 @@ export default function RechartsView({
       if (!kpiKey) {
         return <div className="flex items-center justify-center h-full text-slate-500 text-xs">Select a metric to view KPI status.</div>;
       }
-      const values = data.map((r) => Number(r[kpiKey])).filter((v) => !isNaN(v));
+      const values = data.filter(r => r[kpiKey] != null).map((r) => Number(r[kpiKey])).filter((v) => !isNaN(v));
       const latestValue = values[values.length - 1] ?? 0;
       const sum = values.reduce((a, b) => a + b, 0);
       const firstValue = values[0] ?? 0;
-      const displayValue = data.length === 1 ? latestValue : sum;
+      const displayValue = !values.length ? null : data.length === 1 ? latestValue : sum;
       const displayLabel = data.length === 1 ? 'Value' : 'Total Aggregate';
       let percentageChange = 0;
       if (data.length > 1 && firstValue !== 0) {
